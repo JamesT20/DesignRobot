@@ -1,0 +1,69 @@
+rover/
+│
+├── main.py                        # Entry point — wires everything together
+├── config.py                      # Persisted user settings (IP, port, thresholds)
+├── requirements.txt               # Python dependencies
+├── README.md                      # Project notes
+│
+├── core/                          # Business logic — no UI, no hardware specifics
+│   ├── __init__.py
+│   ├── protocol.py                # Message definitions, serialization, parsing
+│   ├── telemetry.py               # Telemetry state store — current values of all mnemonics
+│   ├── commands.py                # Command builders — functions that return command dicts
+│   ├── faults.py                  # Fault detection logic and fault state tracking
+│   └── constants.py              # All mnemonics, command names, severity levels, enums
+│
+├── network/                       # All socket and threading code — zero UI knowledge
+│   ├── __init__.py
+│   ├── tcp_client.py              # Raw TCP socket management — connect, send, recv, reconnect
+│   ├── rx_thread.py               # Receive thread — reads socket, puts messages on rx_queue
+│   ├── tx_thread.py               # Transmit thread — reads tx_queue, sends to socket
+│   ├── connection_manager.py      # State machine — DISCONNECTED/CONNECTING/CONNECTED/ERROR
+│   └── camera_thread.py          # MJPEG stream thread — pulls frames, puts on frame_queue
+│
+├── ui/                            # All Tkinter code — zero socket knowledge
+│   ├── __init__.py
+│   ├── app.py                     # Root window, layout, poll loop, shutdown handler
+│   ├── panels/
+│   │   ├── __init__.py
+│   │   ├── connection_panel.py    # IP, port, connect button, status indicator
+│   │   ├── telemetry_panel.py     # Live value displays, charts
+│   │   ├── command_panel.py       # Motor controls, command buttons
+│   │   ├── camera_panel.py        # MJPEG frame display
+│   │   ├── fault_panel.py         # Active fault list, fault history
+│   │   └── log_panel.py          # Scrollable message log
+│   ├── widgets/
+│   │   ├── __init__.py
+│   │   ├── status_indicator.py    # Colored dot/label widget for connection state
+│   │   ├── gauge.py               # Reusable gauge widget for voltage, current etc
+│   │   ├── motor_control.py       # Joystick or slider widget for motor input
+│   │   └── chart.py              # Reusable rolling chart widget
+│   └── theme.py                  # Colors, fonts, sizing constants
+│
+├── logs/                          # Runtime logs written here automatically
+│   └── .gitkeep
+│
+└── tests/                         # Test scripts
+    ├── mock_esp32.py              # Fake TCP server that sends fake telemetry — for testing without hardware
+    ├── test_protocol.py           # Unit tests for message parsing and serialization
+    ├── test_faults.py             # Unit tests for fault detection logic
+    └── test_commands.py          # Unit tests for command builders
+
+---
+
+## Key Files to Build First
+
+Build in this order and test each before moving to the next:
+
+| Order | File | Why First |
+|---|---|---|
+| 1 | `core/constants.py` | Every other file imports from here |
+| 2 | `core/protocol.py` | Defines message structure everything depends on |
+| 3 | `network/tcp_client.py` | Core networking in isolation |
+| 4 | `tests/mock_esp32.py` | Lets you test without hardware |
+| 5 | `network/connection_manager.py` | State machine around tcp_client |
+| 6 | `core/telemetry.py` | State store before UI needs it |
+| 7 | `ui/app.py` | Shell before adding panels |
+| 8 | `ui/panels/` | One panel at a time |
+| 9 | `core/faults.py` | After basic pipeline is working |
+| 10 | `network/camera_thread.py` | Last — camera is independent |

@@ -1,24 +1,25 @@
-import threading
-from config import HOST, PORT
-from net.tcp_client import TCPClient
-from core.controller import Controller
+import queue
+import tkinter as tk
+from network.connection_manager import ConnectionManager
+# from network.camera_thread import CameraThread
+from core.telemetry import TelemetryStore
 from ui.app import App
 
-
-# Entry point of program
-
 def main():
-    # setup controller and client objects
-    client = TCPClient(HOST, PORT)
-    controller = Controller(client)
+    # Shared queues — the only thing that crosses layer boundaries
+    rx_queue    = queue.Queue(maxsize=1000)
+    tx_queue    = queue.Queue(maxsize=100)
+    frame_queue = queue.Queue(maxsize=5)
 
-    # start seperate thread for connection
-    net_thread = threading.Thread(target=controller.run, daemon=True)
-    net_thread.start()
+    telemetry   = TelemetryStore()
+    conn        = ConnectionManager(rx_queue, tx_queue)
+    camera      = None # CameraThread(frame_queue)
 
-    # launch app
-    app = App(controller)
-    app.mainloop()
+    root = tk.Tk()
+    app  = App(root, telemetry, conn, camera, rx_queue, tx_queue, frame_queue)
+
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
+    root.mainloop()
 
 if __name__ == "__main__":
     main()
