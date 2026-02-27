@@ -29,6 +29,8 @@ class TLM:
     IMU_MAG_Y       = "IMU_MAG_Y"
     IMU_MAG_Z       = "IMU_MAG_Z"
     IMU_HEADING     = "IMU_HEADING"
+    IMU_ROLL        = "IMU_ROLL"
+    IMU_PITCH       = "IMU_PITCH"
 
     # Temperature probe
     TMP_PROBE       = "TMP_PROBE"
@@ -53,8 +55,8 @@ class TLM:
 
     # Faults
     FLT_IMU_TILT    = "FLT_IMU_TILT"
-    FLT_MOT_STALL_L = "FLT_MOT_STALL_L"
-    FLT_MOT_STALL_R = "FLT_MOT_STALL_R"
+    FLT_MOT_STALL_1 = "FLT_MOT_STALL_1"
+    FLT_MOT_STALL_2 = "FLT_MOT_STALL_2"
 
 ### Command Names ###
 class CMD:

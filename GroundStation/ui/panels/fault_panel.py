@@ -1,36 +1,47 @@
 import tkinter as tk
 from tkinter import ttk
-import time
+from core.constants import TLM
 
-SEVERITY_COLORS = {
-    "INFO":     "#ffffff",
-    "WARN":     "#f0a500",
-    "FAULT":    "#ff6600",
-    "CRITICAL": "#cc0000",
-}
+FAULTS = [
+    (TLM.FLT_IMU_TILT,    "TILT"),
+    (TLM.FLT_MOT_STALL_1, "L MTR\nSTALL"),
+    (TLM.FLT_MOT_STALL_2, "R MTR\nSTALL"),
+]
 
 class FaultPanel(ttk.LabelFrame):
-    def __init__(self, parent):
+    def __init__(self, parent, telemetry):
         super().__init__(parent, text="Faults")
-        self._tree = ttk.Treeview(self, columns=("time", "severity", "fault", "msg"), show="headings", height=8)
-        self._tree.heading("time",     text="Time")
-        self._tree.heading("severity", text="Severity")
-        self._tree.heading("fault",    text="Mnemonic")
-        self._tree.heading("msg",      text="Message")
-        self._tree.column("time",      width=80)
-        self._tree.column("severity",  width=70)
-        self._tree.column("fault",     width=160)
-        self._tree.column("msg",       width=250)
-        self._tree.pack(fill="both", expand=True, padx=5, pady=5)
-        ttk.Button(self, text="Clear", command=self._clear).pack(pady=2)
+        self.telemetry = telemetry
+        self._fault_buttons = {}
+        self._build()
 
-    def add_fault(self, fault: dict):
-        ts  = time.strftime("%H:%M:%S")
-        sev = fault.get("severity", "INFO")
-        if hasattr(sev, "value"):
-            sev = sev.value
-        self._tree.insert("", 0, values=(ts, sev, fault.get("flt", ""), fault.get("msg", "")))
+    def _build(self):
+        for i, (mnemonic, label) in enumerate(FAULTS):
+            btn = FaultButton(self, label)
+            btn.grid(row=0, column=i, padx=3, pady=4)
+            self._fault_buttons[mnemonic] = btn
 
-    def _clear(self):
-        for row in self._tree.get_children():
-            self._tree.delete(row)
+    def refresh(self):
+        for mnemonic, btn in self._fault_buttons.items():
+            btn.set(self.telemetry.get(mnemonic))
+
+
+class FaultButton(tk.Label):
+    ACTIVE  = {"bg": "#cc2200", "fg": "white"}
+    WARNING = {"bg": "#cc8800", "fg": "white"}
+    NOMINAL = {"bg": "#444444", "fg": "#aaaaaa"}
+
+    def __init__(self, parent, label, **kwargs):
+        super().__init__(parent, text=label, font=("Arial", 9, "bold"),
+                         width=8, height=2, relief="flat",
+                         **{**self.NOMINAL, **kwargs})
+        self.set(None)
+
+    def set(self, state):
+        style = {
+            True:   self.ACTIVE,
+            "warn": self.WARNING,
+            False:  self.NOMINAL,
+            None:   self.NOMINAL,
+        }.get(state, self.NOMINAL)
+        self.config(**style)
