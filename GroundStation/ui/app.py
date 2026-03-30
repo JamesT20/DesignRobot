@@ -34,7 +34,7 @@ class App:
         self.tlm_panel   = TelemetryPanel(self.root, self.telemetry)
         self.cmd_panel   = CommandPanel(self.root, self.tx_queue)
         self.view_panel  = OrientationPanel(self.root, self.telemetry)
-       # self.cam_panel   = OrientationPanel(self.root, self.telemetry)#CameraPanel(self.root, self.frame_queue)
+        self.cam_panel   = CameraPanel(self.root, self.frame_queue)
         self.fault_panel = FaultPanel(self.root, self.telemetry)
         self.log_panel   = LogPanel(self.root)
 
@@ -42,6 +42,7 @@ class App:
         self.tlm_panel.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
         self.cmd_panel.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
         self.view_panel.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        self.cam_panel.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
         self.fault_panel.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
         self.log_panel.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
 
