@@ -6,7 +6,10 @@ from ui.panels.camera_panel import CameraPanel
 from ui.panels.fault_panel import FaultPanel
 from ui.panels.log_panel import LogPanel
 from ui.panels.orientation_panel import OrientationPanel
-#from core.faults import FaultManager
+from ui.panels.clock_panel import ClockPanel
+from ui.theme import Theme
+Theme = Theme()
+
 import queue
 
 POLL_INTERVAL_MS = 50
@@ -20,8 +23,11 @@ class App:
         self.rx_queue    = rx_queue
         self.tx_queue    = tx_queue
         self.frame_queue = frame_queue
-       # self.faults      = FaultManager(telemetry, cfg={})
-
+        
+ 
+        root.tk_setPalette(background=Theme.BG, foreground=Theme.TEXT, 
+                   activeBackground=Theme.RED, selectBackground=Theme.RED)
+        root.option_add("*Font", (Theme.FONT_MONO, Theme.FONT_SIZE_M))
         root.title("DUI GUI")
         root.geometry("1280x800")
         root.minsize(1024, 600)
@@ -30,21 +36,36 @@ class App:
         self._poll()
 
     def _build_layout(self):
-        self.conn_panel  = ConnectionPanel(self.root, self.conn)
-        self.tlm_panel   = TelemetryPanel(self.root, self.telemetry)
-        self.cmd_panel   = CommandPanel(self.root, self.tx_queue)
-        self.view_panel  = OrientationPanel(self.root, self.telemetry)
-        self.cam_panel   = CameraPanel(self.root, self.frame_queue)
-        self.fault_panel = FaultPanel(self.root, self.telemetry)
-        self.log_panel   = LogPanel(self.root)
 
-        self.conn_panel.grid(row=0, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
-        self.tlm_panel.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-        self.cmd_panel.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
-        self.view_panel.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
-        self.cam_panel.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
-        self.fault_panel.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
-        self.log_panel.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.left_frame = tk.Frame(self.root)
+        self.middle_frame = tk.Frame(self.root)
+        self.right_frame = tk.Frame(self.root)
+
+        self.left_frame.pack(side="left", fill="both", expand=True)
+        self.middle_frame.pack(side="left", fill="both", expand=True)
+        self.right_frame.pack(side="left", fill="both", expand=True)
+
+        self.conn_panel  = ConnectionPanel(self.left_frame, self.conn)
+        self.cmd_panel   = CommandPanel(self.left_frame, self.tx_queue)
+        self.cam_panel   = CameraPanel(self.left_frame, self.frame_queue)
+
+        self.clock_panel = ClockPanel(self.middle_frame)
+        self.view_panel  = OrientationPanel(self.middle_frame, self.telemetry)
+        self.fault_panel = FaultPanel(self.middle_frame, self.telemetry)
+        self.log_panel   = LogPanel(self.middle_frame)
+
+        self.tlm_panel   = TelemetryPanel(self.right_frame, self.telemetry)
+
+        self.conn_panel.pack(fill="x", padx=5, pady=5)
+        self.cam_panel.pack(fill="x", padx=5, pady=5)
+        self.cmd_panel.pack(fill="x", padx=5, pady=5)
+       
+        self.clock_panel.pack(fill="x", padx=5, pady=5)
+        self.view_panel.pack(fill="x", padx=5, pady=5)
+        self.fault_panel.pack(fill="x", padx=5, pady=5)
+        self.log_panel.pack(fill="x", padx=5, pady=5)
+
+        self.tlm_panel.pack(fill="x", padx=5, pady=5)
 
     def _poll(self):
         # Drain telemetry queue
@@ -54,12 +75,6 @@ class App:
                 self._handle_message(msg)
         except queue.Empty:
             pass
-
-        # Check faults
-        # new_faults = self.faults.check()
-        # for f in new_faults:
-        #     self.fault_panel.add_fault(f)
-        #     self.log_panel.log(f["msg"], level=f["severity"].value)
 
         self.root.after(POLL_INTERVAL_MS, self._poll)
 

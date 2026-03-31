@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import ttk
 import numpy as np
 import struct
 import math
@@ -10,9 +9,9 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from core.constants import TLM
+from ui.theme import Theme
+Theme = Theme()
 
-BG     = "#050a07"
-BORDER = "#1a3a20"
 ACCENT = "#00ff66"
 CYAN   = "#00ddff"
 DIM    = "#0d2a12"
@@ -93,10 +92,10 @@ def rotation_matrix(roll_deg, pitch_deg, yaw_deg):
 
 # ── widget ────────────────────────────────────────────────────────────────────
 
-class OrientationPanel(ttk.LabelFrame):
+class OrientationPanel(tk.Frame):
 
-    def __init__(self, parent, telemetry, size=3.5, **kwargs):
-        super().__init__(parent, text="Orientation", **kwargs)
+    def __init__(self, parent, telemetry, size=3, **kwargs):
+        super().__init__(parent,highlightbackground=Theme.PANEL_EDGE,highlightcolor=Theme.PANEL_EDGE,highlightthickness=3, **kwargs)
         self.telemetry = telemetry
         self._size = size
         self._roll = self._pitch = self._yaw = 0.0
@@ -128,9 +127,9 @@ class OrientationPanel(ttk.LabelFrame):
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _build(self):
-        self._fig = plt.Figure(figsize=(self._size, self._size), facecolor=BG)
+        self._fig = plt.Figure(figsize=(self._size, self._size), facecolor=Theme.BG)
         self._ax  = self._fig.add_subplot(111, projection="3d", computed_zorder=False)
-        self._ax.set_facecolor(BG)
+        self._ax.set_facecolor(Theme.BG)
         self._fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
         self._ax.set_axis_off()
         self._ax.set_xlim(-1.2, 1.2)
@@ -138,11 +137,11 @@ class OrientationPanel(ttk.LabelFrame):
         self._ax.set_zlim(-1.2, 1.2)
         self._ax.set_box_aspect([1, 1, 1])
 
-        for label, pos, col in [("X+", (1.3,0,0), "#ff4444"),
-                                  ("Y+", (0,1.3,0), ACCENT),
-                                  ("Z+", (0,0,1.3), CYAN)]:
+        for label, pos, col in [("X+", (1.3,0,0), Theme.TEXT),
+                                  ("Y+", (0,1.3,0), Theme.TEXT),
+                                  ("Z+", (0,0,1.3), Theme.TEXT)]:
             self._ax.text(*pos, label, color=col, fontsize=7,
-                          fontfamily="Courier New", ha="center", va="center")
+                          fontfamily=Theme.FONT_MONO, ha="center", va="center")
 
         self._canvas = FigureCanvasTkAgg(self._fig, master=self)
         self._canvas.get_tk_widget().configure(highlightthickness=0)
@@ -168,13 +167,13 @@ class OrientationPanel(ttk.LabelFrame):
              [xs[i+1], ys[j+1], -1.05], [xs[i], ys[j+1], -1.05]]
             for i in range(len(xs)-1) for j in range(len(ys)-1)
         ]
-        self._floor = Poly3DCollection(floor_verts, edgecolor=DIM,
+        self._floor = Poly3DCollection(floor_verts, edgecolor=Theme.PANEL_EDGE,
                                         facecolor=(0.01, 0.06, 0.02, 0.4),
                                         linewidth=0.3, zorder=1)
         self._ax.add_collection3d(self._floor)
 
         # Mesh on top
-        ec = CYAN if self._stl_loaded else ACCENT
+        ec = CYAN if self._stl_loaded else Theme.ACCENT
         lw = 0.35 if self._stl_loaded else 0.6
         self._mesh = Poly3DCollection(rotated, edgecolor=ec,
                                        facecolor=(0.02, 0.08, 0.04, 0.55),

@@ -1,6 +1,7 @@
 import tkinter as tk
-from tkinter import ttk
 from core.constants import TLM
+from ui.theme import Theme
+Theme = Theme()
 
 SECTIONS = [
     ("Battery",  [(TLM.PWR_BAT_VOLT, "Voltage", "V"), (TLM.PWR_BAT_CUR, "Current", "A")]),
@@ -14,26 +15,27 @@ SECTIONS = [
                   (TLM.PWR_MOT2_VOLT, "Voltage", "V"), (TLM.PWR_MOT2_CUR, "Current", "A")]),
 ]
 
-class TelemetryPanel(ttk.LabelFrame):
+class TelemetryPanel(tk.Frame):
     def __init__(self, parent, telemetry):
-        super().__init__(parent, text="Telemetry")
+        super().__init__(parent,highlightbackground=Theme.PANEL_EDGE,highlightcolor=Theme.PANEL_EDGE,highlightthickness=3)
         self.telemetry = telemetry
         self._vars = {}
         self._build()
 
     def _build(self):
-        for col_offset, (section_name, fields) in enumerate(SECTIONS):
-            base_col = col_offset * 4  # 4 grid columns per section: spacer, label, value, unit
-
-            ttk.Label(self, text=section_name, font=("", 9, "bold")).grid(
-                row=0, column=base_col, columnspan=3, sticky="w", padx=(10, 2), pady=(4, 0)
+        row = 0
+        for section_name, fields in SECTIONS:
+            tk.Label(self, text=section_name, font=(Theme.FONT_MONO, Theme.FONT_SIZE_L, "bold", "underline"), anchor="w").grid(
+                row=row, column=0, columnspan=3, sticky="w", padx=(10, 2), pady=(6, 0)
             )
-            for row, (mnemonic, label, unit) in enumerate(fields, start=1):
+            row += 1
+            for mnemonic, label, unit in fields:
                 var = tk.StringVar(value="--")
                 self._vars[mnemonic] = var
-                ttk.Label(self, text=label, width=10, anchor="w").grid(row=row, column=base_col,     padx=(10, 2), pady=1)
-                ttk.Label(self, textvariable=var,  width=8,  anchor="e").grid(row=row, column=base_col + 1, padx=2)
-                ttk.Label(self, text=unit,         width=4,  anchor="w").grid(row=row, column=base_col + 2, padx=2)
+                tk.Label(self, text=label, width=10, anchor="w").grid(row=row, column=0, padx=(10, 2), pady=1)
+                tk.Label(self, textvariable=var,  width=8,  anchor="e").grid(row=row, column=1, padx=2)
+                tk.Label(self, text=unit,         width=4,  anchor="w").grid(row=row, column=2, padx=2)
+                row += 1
 
     def refresh(self):
         for mnemonic, var in self._vars.items():
