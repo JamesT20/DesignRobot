@@ -1,7 +1,6 @@
 /*
   ESP32-S3 WROOM + OV3660 — MJPEG Stream Server
   Streams to: http://192.168.4.1/stream
-
   Board settings (Arduino IDE):
     Board:            ESP32S3 Dev Module
     PSRAM:            OPI PSRAM
@@ -11,10 +10,13 @@
 
 #include "esp_camera.h"
 #include <WiFi.h>
-#include <WebServer.h>
+#include <WiFiClient.h>
 
 const char* AP_SSID     = "ESP32-CAM";
 const char* AP_PASSWORD = "12345678";
+
+// Target frame interval in milliseconds — raise to slow down, lower to speed up
+#define FRAME_INTERVAL_MS 150   // ~6 fps
 
 #define PWDN_GPIO_NUM   -1
 #define RESET_GPIO_NUM  -1
@@ -36,11 +38,24 @@ const char* AP_PASSWORD = "12345678";
 #define MJPEG_BOUNDARY     "frame"
 #define MJPEG_CONTENT_TYPE "multipart/x-mixed-replace;boundary=" MJPEG_BOUNDARY
 
-WebServer server(80);
+WiFiServer server(80);
 
-void handleStream() {
-  WiFiClient client = server.client();
+// ── OV3660 image-quality tuning ─────────────────────────────────────────────
+// Called once after esp_camera_init().  The OV3660 ships with conservative
+// defaults; these register writes bring colours, contrast and sharpness up to
+// a usable level.
+void applyOV3660Corrections() {
+  sensor_t* s = esp_camera_sensor_get();
+  if (!s) return;
 
+  // Orientation — OV3660 on most ESP32-S3 carrier boards is mounted upside-down
+  s->set_vflip(s, 1);        // flip vertically
+  s->set_hmirror(s, 0);      // set to 1 if image is also horizontally mirrored
+
+}
+// ────────────────────────────────────────────────────────────────────────────
+
+void handleStream(WiFiClient& client) {
   client.print(
     "HTTP/1.1 200 OK\r\n"
     "Content-Type: " MJPEG_CONTENT_TYPE "\r\n"
@@ -49,16 +64,28 @@ void handleStream() {
     "\r\n"
   );
 
+  unsigned long lastFrame = 0;
+
   while (client.connected()) {
+
+    // ── rate limiting ───────────────────────────────────────────────────────
+    unsigned long now = millis();
+    long toWait = (long)FRAME_INTERVAL_MS - (long)(now - lastFrame);
+    if (toWait > 0) {
+      delay(toWait);
+    }
+    lastFrame = millis();
+    // ───────────────────────────────────────────────────────────────────────
+
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) { delay(10); continue; }
 
-    client.print(
+    String frameHeader =
       "--" MJPEG_BOUNDARY "\r\n"
       "Content-Type: image/jpeg\r\n"
       "Content-Length: " + String(fb->len) + "\r\n"
-      "\r\n"
-    );
+      "\r\n";
+    client.print(frameHeader);
 
     const uint8_t* ptr = fb->buf;
     size_t remaining   = fb->len;
@@ -68,15 +95,36 @@ void handleStream() {
       ptr       += sent;
       remaining -= sent;
     }
-
     client.print("\r\n");
     esp_camera_fb_return(fb);
-    delay(1);
+  }
+}
+
+void handleClient(WiFiClient& client) {
+  String requestLine = client.readStringUntil('\n');
+  requestLine.trim();
+
+  while (client.available()) {
+    String line = client.readStringUntil('\n');
+    if (line == "\r" || line.isEmpty()) break;
+  }
+
+  if (requestLine.startsWith("GET /stream")) {
+    handleStream(client);
+  } else {
+    client.print(
+      "HTTP/1.1 404 Not Found\r\n"
+      "Content-Length: 0\r\n"
+      "Connection: close\r\n"
+      "\r\n"
+    );
   }
 }
 
 void setup() {
   Serial.begin(115200);
+  delay(1000);
+  Serial.println("Starting...");
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -102,7 +150,7 @@ void setup() {
 
   if (psramFound()) {
     config.frame_size   = FRAMESIZE_VGA;
-    config.jpeg_quality = 12;
+    config.jpeg_quality = 10;  // slightly higher quality (lower number = better)
     config.fb_count     = 2;
     config.grab_mode    = CAMERA_GRAB_LATEST;
   } else {
@@ -117,14 +165,21 @@ void setup() {
     while (true) delay(1000);
   }
 
+  // Apply OV3660-specific image corrections after init
+  applyOV3660Corrections();
+
   WiFi.softAP(AP_SSID, AP_PASSWORD);
   delay(500);
   Serial.printf("Stream: http://%s/stream\n", WiFi.softAPIP().toString().c_str());
 
-  server.on("/stream", HTTP_GET, handleStream);
   server.begin();
 }
 
 void loop() {
-  server.handleClient();
+  if (server.hasClient()) {
+    WiFiClient client = server.available();
+    if (client) {
+      handleClient(client);
+    }
+  }
 }
