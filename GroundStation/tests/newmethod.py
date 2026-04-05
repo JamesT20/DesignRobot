@@ -14,6 +14,7 @@ class Dashboard(tk.Tk):
         super().__init__()
         self.title("Telemetry Dashboard")
         self.configure(bg="#1a1a2e")
+        self._session = requests.Session()
         self._build_ui()
         self._running = True
         self._frame_times = []
@@ -45,7 +46,7 @@ class Dashboard(tk.Tk):
         """Runs in a background thread; fetches /tlm every 200 ms."""
         while self._running:
             try:
-                resp = requests.get(f"{SERVER}/tlm", timeout=2)
+                resp = self._session.get(f"{SERVER}/tlm", timeout=2)
                 data = resp.json()
                 self.after(0, self._update_telemetry, data)
             except Exception:
@@ -71,7 +72,7 @@ class Dashboard(tk.Tk):
     def _stream_video(self):
         while self._running:
             try:
-                with requests.get(f"{SERVER}/stream", stream=True, timeout=10) as resp:
+                with self._session.get(f"{SERVER}/stream", stream=True, timeout=10) as resp:
                     buf = b""
                     for chunk in resp.iter_content(chunk_size=16384):
                         if not self._running:
@@ -98,7 +99,6 @@ class Dashboard(tk.Tk):
 
             now = time.monotonic()
             self._frame_times.append(now)
-            # Keep only the last second of timestamps
             cutoff = now - 1.0
             self._frame_times = [t for t in self._frame_times if t > cutoff]
             fps = len(self._frame_times)
@@ -108,6 +108,7 @@ class Dashboard(tk.Tk):
 
     def destroy(self):
         self._running = False
+        self._session.close()
         super().destroy()
 
 if __name__ == "__main__":
