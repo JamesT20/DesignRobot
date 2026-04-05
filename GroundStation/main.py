@@ -1,7 +1,7 @@
 import queue
 import tkinter as tk
 from network.connection_manager import ConnectionManager
-# from network.camera_thread import CameraThread
+from network.camera_thread import CameraThread
 from core.telemetry import TelemetryStore
 from ui.app import App
 
@@ -13,7 +13,7 @@ def main():
 
     telemetry   = TelemetryStore()
     conn        = ConnectionManager(rx_queue, tx_queue)
-    camera      = None # CameraThread(frame_queue)
+    camera      = CameraThread(frame_queue)
 
     root = tk.Tk()
     app  = App(root, telemetry, conn, camera, rx_queue, tx_queue, frame_queue)

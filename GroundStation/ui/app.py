@@ -45,7 +45,7 @@ class App:
         self.middle_frame.pack(side="left", fill="both", expand=True)
         self.right_frame.pack(side="left", fill="both", expand=True)
 
-        self.conn_panel  = ConnectionPanel(self.left_frame, self.conn)
+        self.conn_panel  = ConnectionPanel(self.left_frame, self.conn, self.camera)
         self.cmd_panel   = CommandPanel(self.left_frame, self.tx_queue)
         self.cam_panel   = CameraPanel(self.left_frame, self.frame_queue)
 
@@ -94,5 +94,5 @@ class App:
 
     def on_close(self):
         self.conn.disconnect()
-        # self.camera.stop()
+        self.camera.stop()
         self.root.destroy()
