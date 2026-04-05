@@ -64,38 +64,22 @@ void handleStream(WiFiClient& client) {
     "\r\n"
   );
 
-  unsigned long lastFrame = 0;
-
   while (client.connected()) {
-
-    // ── rate limiting ───────────────────────────────────────────────────────
-    unsigned long now = millis();
-    long toWait = (long)FRAME_INTERVAL_MS - (long)(now - lastFrame);
-    if (toWait > 0) {
-      delay(toWait);
-    }
-    lastFrame = millis();
-    // ───────────────────────────────────────────────────────────────────────
+    delay(FRAME_INTERVAL_MS);
 
     camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) { delay(10); continue; }
+    if (!fb) continue;
 
-    String frameHeader =
+    client.printf(
       "--" MJPEG_BOUNDARY "\r\n"
       "Content-Type: image/jpeg\r\n"
-      "Content-Length: " + String(fb->len) + "\r\n"
-      "\r\n";
-    client.print(frameHeader);
-
-    const uint8_t* ptr = fb->buf;
-    size_t remaining   = fb->len;
-    while (remaining > 0 && client.connected()) {
-      size_t sent = client.write(ptr, min(remaining, (size_t)1024));
-      if (sent == 0) break;
-      ptr       += sent;
-      remaining -= sent;
-    }
+      "Content-Length: %u\r\n"
+      "\r\n",
+      fb->len
+    );
+    client.write(fb->buf, fb->len);
     client.print("\r\n");
+
     esp_camera_fb_return(fb);
   }
 }
