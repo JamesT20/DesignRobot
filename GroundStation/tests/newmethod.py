@@ -60,23 +60,31 @@ class Dashboard(tk.Tk):
     # ── MJPEG stream ───────────────────────────────────────────────────────────
 
     def _stream_video(self):
-        """Runs in a background thread; parses the multipart MJPEG stream."""
-        try:
-            with requests.get(f"{SERVER}/stream", stream=True, timeout=10) as resp:
-                buf = b""
-                for chunk in resp.iter_content(chunk_size=4096):
-                    if not self._running:
-                        break
-                    buf += chunk
-                    # JPEG frames start with FF D8 and end with FF D9
-                    start = buf.find(b"\xff\xd8")
-                    end   = buf.find(b"\xff\xd9")
-                    if start != -1 and end != -1 and end > start:
-                        jpg = buf[start:end + 2]
-                        buf = buf[end + 2:]
-                        self.after(0, self._update_frame, jpg)
-        except Exception as e:
-            print(f"[stream] {e}")
+        while self._running:
+            try:
+                with requests.get(f"{SERVER}/stream", stream=True, timeout=10) as resp:
+                    print(f"[stream] connected, content-type: {resp.headers.get('content-type')}")
+                    buf = b""
+                    chunk_count = 0
+                    for chunk in resp.iter_content(chunk_size=16384):
+                        if not self._running:
+                            return
+                        buf += chunk
+                        chunk_count += 1
+                        print(f"[stream] chunk #{chunk_count}, size={len(chunk)}, buf={len(buf)}")
+                        while True:
+                            start = buf.find(b"\xff\xd8")
+                            end   = buf.find(b"\xff\xd9", start)
+                            if start == -1 or end == -1:
+                                break
+                            jpg = buf[start:end + 2]
+                            buf = buf[end + 2:]
+                            print(f"[stream] frame found, size={len(jpg)}")
+                            self.after(0, self._update_frame, jpg)
+                    print("[stream] loop ended — server closed connection")
+            except Exception as e:
+                print(f"[stream] exception: {e}")
+            threading.Event().wait(1)
 
     def _update_frame(self, jpg_bytes: bytes):
         """Called on the main thread — converts JPEG bytes → PhotoImage."""
