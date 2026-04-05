@@ -3,8 +3,9 @@
 // Vehicle software for PROJECT DUI robot
 //
 // Created March 2026 by James Torok
+// Rewritten to use ESPAsyncWebServer
 //
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////                                                                                                                          
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////// INIT ///////////////////////////////////////////////////////////////////
 
@@ -12,7 +13,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "esp_camera.h"
-#include <WiFiClient.h>
+#include <ESPAsyncWebServer.h>
 
 ///// Set important constants /////
 
@@ -39,34 +40,77 @@
 #define MJPEG_CONTENT_TYPE "multipart/x-mixed-replace;boundary=" MJPEG_BOUNDARY
 
 // Access Point credentials
-const char* ssid = "PROJECT_DUI_ESP32";
+const char* ssid     = "PROJECT_DUI_ESP32";
 const char* password = "12345678";
 
-// Create servers
-WiFiServer server(8080); // Tlm data
-WiFiServer server(80); // image data
+// Single async server on port 80
+// Telemetry → GET /tlm
+// MJPEG     → GET /stream
+AsyncWebServer server(80);
 
-// Setup wifi client for recieving data
-WiFiClient client;
-
-unsigned long lastSend = 0;
 unsigned long lastLoopTime = 0;
 uint32_t seq = 0;
 
 ///////////////////////////////////////////////////////// END INIT ///////////////////////////////////////////////////////////////
+
+// Forward declarations
+void applyOV3660Corrections();
+String buildTelemetryJson();
+
+///////////////////////////////////////////////////////// SETUP //////////////////////////////////////////////////////////////////
 
 void setup() {
   Serial.begin(115200);
 
   // Start as Access Point
   WiFi.softAP(ssid, password);
-
   Serial.println("AP Started!");
   Serial.println(WiFi.softAPIP());  // Usually 192.168.4.1
 
+  // ── Telemetry endpoint ──────────────────────────────────────────────────────
+  // Returns a single JSON snapshot; poll from the GCS at whatever rate you like.
+  server.on("/tlm", HTTP_GET, [](AsyncWebServerRequest* request) {
+    String json = buildTelemetryJson();
+    request->send(200, "application/json", json);
+  });
+
+  // ── MJPEG stream endpoint ───────────────────────────────────────────────────
+  server.on("/stream", HTTP_GET, [](AsyncWebServerRequest* request) {
+    // AsyncResponseStream lets us push chunks without blocking the server task.
+    AsyncResponseStream* response =
+        request->beginResponseStream(MJPEG_CONTENT_TYPE);
+    response->addHeader("Cache-Control", "no-cache");
+    response->addHeader("Connection",    "keep-alive");
+
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (!fb) {
+      request->send(503, "text/plain", "Camera frame unavailable");
+      return;
+    }
+
+    // Write one MJPEG part
+    response->printf(
+        "--" MJPEG_BOUNDARY "\r\n"
+        "Content-Type: image/jpeg\r\n"
+        "Content-Length: %u\r\n"
+        "\r\n",
+        fb->len
+    );
+    response->write(fb->buf, fb->len);
+    response->print("\r\n");
+
+    esp_camera_fb_return(fb);
+    request->send(response);
+  });
+
+  // ── 404 fallback ────────────────────────────────────────────────────────────
+  server.onNotFound([](AsyncWebServerRequest* request) {
+    request->send(404, "text/plain", "Not found");
+  });
+
   server.begin();
 
-  // configure camera
+  // ── Camera init ─────────────────────────────────────────────────────────────
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer   = LEDC_TIMER_0;
@@ -88,119 +132,83 @@ void setup() {
   config.pin_reset    = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-
   config.frame_size   = FRAMESIZE_VGA;
-  config.jpeg_quality = 12;  // slightly higher quality (lower number = better)
+  config.jpeg_quality = 12;
   config.fb_count     = 2;
   config.grab_mode    = CAMERA_GRAB_LATEST;
 
   if (esp_camera_init(&config) != ESP_OK) {
     Serial.println("Camera init failed");
   }
-  
-  // Apply OV3660-specific image corrections after init
+
   applyOV3660Corrections();
 }
 
+///////////////////////////////////////////////////////// LOOP ///////////////////////////////////////////////////////////////////
+
 void loop() {
+  // ESPAsyncWebServer handles requests on its own FreeRTOS task.
+  // Use loop() for anything time-sensitive: motor control, IMU reads, etc.
   lastLoopTime = millis();
 
-  if (!client || !client.connected()){
-    client = server.available();
-    return;
-  }
-
-  if (millis() - lastSend > 100){
-    sendTelemetry();
-    sendImage();
-    lastSend = millis();
-  }
+  // Example: update seq counter so telemetry always reflects latest value
+  // (real sensor reads would go here)
+  delay(10);
 }
 
-void sendTelemetry()
-{
-  StaticJsonDocument<1536> doc;
+///////////////////////////////////////////////////////// HELPERS ////////////////////////////////////////////////////////////////
 
-  float t = millis() / 1000.0;
+String buildTelemetryJson() {
+  StaticJsonDocument<1536> doc;
 
   doc["type"] = "tlm";
 
   // System
-  doc["SYS_UPTIME"] = millis() / 1000;
+  doc["SYS_UPTIME"]    = millis() / 1000;
   doc["SYS_HEAP_FREE"] = ESP.getFreeHeap();
   doc["SYS_LOOP_TIME"] = millis() - lastLoopTime;
-  doc["SYS_PACKET_NUM"] = seq;
-  doc["SYS_MODE"] = "TEST";
+  doc["SYS_PACKET_NUM"] = seq++;
+  doc["SYS_MODE"]      = "TEST";
 
   // Power
-  doc["PWR_BAT_VOLT"] = 0;
-  doc["PWR_BAT_CUR"] = 0;
+  doc["PWR_BAT_VOLT"]  = 0;
+  doc["PWR_BAT_CUR"]   = 0;
   doc["PWR_MOT1_VOLT"] = 0;
-  doc["PWR_MOT1_CUR"] = 0;
+  doc["PWR_MOT1_CUR"]  = 0;
   doc["PWR_MOT2_VOLT"] = 0;
-  doc["PWR_MOT2_CUR"] = 0;
+  doc["PWR_MOT2_CUR"]  = 0;
 
   // IMU
   doc["IMU_ACCEL_X"] = 0;
   doc["IMU_ACCEL_Y"] = 0;
   doc["IMU_ACCEL_Z"] = 0;
-
-  doc["IMU_GYRO_X"] = 0;
-  doc["IMU_GYRO_Y"] = 0;
-  doc["IMU_GYRO_Z"] = 0;
-
+  doc["IMU_GYRO_X"]  = 0;
+  doc["IMU_GYRO_Y"]  = 0;
+  doc["IMU_GYRO_Z"]  = 0;
   doc["IMU_HEADING"] = 0;
-  doc["IMU_ROLL"] = 0;
-  doc["IMU_PITCH"] = 0;
+  doc["IMU_ROLL"]    = 0;
+  doc["IMU_PITCH"]   = 0;
 
   // Temp
   doc["TMP_PROBE"] = 0;
 
   // Camera
-  doc["IMG_ENDPOINT"] = "TBD";
+  doc["IMG_ENDPOINT"] = "http://192.168.4.1/stream";
 
   // Motors
   doc["MOT_1_SPEED"] = 0;
-  doc["MOT_1_DIR"] = 0;
-  doc["MOT_1_PWM"] = 0;
-
+  doc["MOT_1_DIR"]   = 0;
+  doc["MOT_1_PWM"]   = 0;
   doc["MOT_2_SPEED"] = 0;
-  doc["MOT_2_DIR"] = 0;
-  doc["MOT_2_PWM"] = 0;
+  doc["MOT_2_DIR"]   = 0;
+  doc["MOT_2_PWM"]   = 0;
 
   // Faults
-  doc["FLT_IMU_TILT"] = false;
+  doc["FLT_IMU_TILT"]    = false;
   doc["FLT_MOT_STALL_1"] = false;
   doc["FLT_MOT_STALL_2"] = false;
 
   String out;
-  serializeJson(doc,out);
-  client.println(out);
-
-  seq++;
-}
-
-void sendImage()
-{
-  client.print(
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: " MJPEG_CONTENT_TYPE "\r\n"
-    "Cache-Control: no-cache\r\n"
-    "Connection: keep-alive\r\n"
-    "\r\n"
-  );
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) continue;
-
-  client.printf(
-    "--" MJPEG_BOUNDARY "\r\n"
-    "Content-Type: image/jpeg\r\n"
-    "Content-Length: %u\r\n"
-    "\r\n",
-    fb->len
-  );
-  client.write(fb->buf, fb->len);
-  client.print("\r\n");
-
-  esp_camera_fb_return(fb);
+  serializeJson(doc, out);
+  return out;
 }
