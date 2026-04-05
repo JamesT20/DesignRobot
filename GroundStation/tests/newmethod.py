@@ -3,6 +3,7 @@ from tkinter import ttk
 import threading
 import requests
 import json
+import time
 from PIL import Image, ImageTk
 import io
 
@@ -15,7 +16,7 @@ class Dashboard(tk.Tk):
         self.configure(bg="#1a1a2e")
         self._build_ui()
         self._running = True
-        # Start both background threads
+        self._frame_times = []
         threading.Thread(target=self._poll_telemetry, daemon=True).start()
         threading.Thread(target=self._stream_video, daemon=True).start()
 
@@ -24,10 +25,19 @@ class Dashboard(tk.Tk):
         self.video_label = tk.Label(self, bg="black")
         self.video_label.pack(pady=10)
 
+        # FPS display
+        fps_frame = tk.Frame(self, bg="#1a1a2e")
+        fps_frame.pack(fill="x", padx=20, pady=(0, 4))
+        tk.Label(fps_frame, text="fps", width=20, anchor="w",
+                 bg="#1a1a2e", fg="#888", font=("Courier", 10)).pack(side="left")
+        self._fps_var = tk.StringVar(value="—")
+        tk.Label(fps_frame, textvariable=self._fps_var, anchor="w",
+                 bg="#1a1a2e", fg="#00ff88", font=("Courier", 10, "bold")).pack(side="left")
+
         # Telemetry frame
         tlm_frame = tk.Frame(self, bg="#1a1a2e")
         tlm_frame.pack(fill="x", padx=20)
-        self.tlm_vars = {}   # will hold StringVar per field
+        self.tlm_vars = {}
 
     # ── Telemetry ──────────────────────────────────────────────────────────────
 
@@ -36,17 +46,16 @@ class Dashboard(tk.Tk):
         while self._running:
             try:
                 resp = requests.get(f"{SERVER}/tlm", timeout=2)
-                data = resp.json()          # dict of telemetry values
+                data = resp.json()
                 self.after(0, self._update_telemetry, data)
-            except Exception as e:
-                print(f"[tlm] {e}")
-            threading.Event().wait(0.2)     # 200 ms poll interval
+            except Exception:
+                pass
+            threading.Event().wait(0.2)
 
     def _update_telemetry(self, data: dict):
         """Called on the main thread — safe to touch widgets."""
         for key, value in data.items():
             if key not in self.tlm_vars:
-                # Dynamically create a row for each new key
                 var = tk.StringVar()
                 self.tlm_vars[key] = var
                 row = tk.Frame(self, bg="#1a1a2e")
@@ -63,15 +72,11 @@ class Dashboard(tk.Tk):
         while self._running:
             try:
                 with requests.get(f"{SERVER}/stream", stream=True, timeout=10) as resp:
-                    print(f"[stream] connected, content-type: {resp.headers.get('content-type')}")
                     buf = b""
-                    chunk_count = 0
                     for chunk in resp.iter_content(chunk_size=16384):
                         if not self._running:
                             return
                         buf += chunk
-                        chunk_count += 1
-                        print(f"[stream] chunk #{chunk_count}, size={len(chunk)}, buf={len(buf)}")
                         while True:
                             start = buf.find(b"\xff\xd8")
                             end   = buf.find(b"\xff\xd9", start)
@@ -79,22 +84,27 @@ class Dashboard(tk.Tk):
                                 break
                             jpg = buf[start:end + 2]
                             buf = buf[end + 2:]
-                            print(f"[stream] frame found, size={len(jpg)}")
                             self.after(0, self._update_frame, jpg)
-                    print("[stream] loop ended — server closed connection")
-            except Exception as e:
-                print(f"[stream] exception: {e}")
-            threading.Event().wait(1)
+            except Exception:
+                pass
 
     def _update_frame(self, jpg_bytes: bytes):
-        """Called on the main thread — converts JPEG bytes → PhotoImage."""
+        """Called on the main thread — converts JPEG bytes → PhotoImage and updates FPS."""
         try:
             img = Image.open(io.BytesIO(jpg_bytes))
             photo = ImageTk.PhotoImage(img)
             self.video_label.configure(image=photo)
-            self.video_label.image = photo   # keep reference alive
-        except Exception as e:
-            print(f"[frame] {e}")
+            self.video_label.image = photo
+
+            now = time.monotonic()
+            self._frame_times.append(now)
+            # Keep only the last second of timestamps
+            cutoff = now - 1.0
+            self._frame_times = [t for t in self._frame_times if t > cutoff]
+            fps = len(self._frame_times)
+            self._fps_var.set(f"{fps}")
+        except Exception:
+            pass
 
     def destroy(self):
         self._running = False
