@@ -44,11 +44,11 @@ class ConnectionManager:
                 self._client = WSClient(host)
                 self._client.connect()
 
-                self._rx = RXThread(self._client, self.rx_queue, self._stop)
+                self._rx = RXThread(self._client._session, self.rx_queue, self._stop)
                 print('rx online')
-                self._tx = TXThread(self._client, self.tx_queue, self._stop)
+                self._tx = TXThread(self._client._session, self.tx_queue, self._stop)
                 print('tx online')
-                self._cam = CameraThread(self._client, self.frame_queue, self._stop)
+                self._cam = CameraThread(self._client._session, self.frame_queue, self._stop)
                 print('cam online')
 
                 self._rx.start()
