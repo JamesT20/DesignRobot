@@ -12,16 +12,8 @@ STATE_COLORS = {
     ConnState.ERROR:        "#cc0000",
 }
 
-CAMERA_COLORS = {
-    "inactive": "#888888",
-    "starting":  "#f0a500",
-    "active":    "#00cc44",
-    "error":     "#cc0000",
-}
-
-
 class ConnectionPanel(tk.Frame):
-    def __init__(self, parent, conn, camera):
+    def __init__(self, parent, conn):
         super().__init__(
             parent,
             highlightbackground=Theme.PANEL_EDGE,
@@ -29,17 +21,12 @@ class ConnectionPanel(tk.Frame):
             highlightthickness=3,
         )
         self.conn = conn
-        self.camera = camera
         self.conn.on_state_change = self._on_state_change
-
-        self._port_var = tk.StringVar(value="8080")
 
         # ── Row 0: Connection controls ────────────────────────────────────────
         ctrl_frame = tk.Frame(self)
         ctrl_frame.grid(row=0, column=0, sticky="w", padx=6, pady=(6, 2))
 
-        tk.Label(ctrl_frame, text="Port",font=(Theme.FONT_MONO, Theme.FONT_SIZE_M)).pack(side=tk.LEFT, padx=(0, 2))
-        tk.Entry(ctrl_frame, textvariable=self._port_var, width=6).pack(side=tk.LEFT, padx=(0, 8))
 
         self._btn = tk.Button(ctrl_frame, text="Connect", command=self._toggle)
         self._btn.pack(side=tk.LEFT, padx=(0, 10))
@@ -49,13 +36,6 @@ class ConnectionPanel(tk.Frame):
         self._conn_dot.pack(side=tk.LEFT, padx=(0, 3))
         self._conn_lbl = tk.Label(ctrl_frame, text="Disconnected",font=(Theme.FONT_MONO, Theme.FONT_SIZE_M))
         self._conn_lbl.pack(side=tk.LEFT, padx=(0, 16))
-
-        # Camera status
-        tk.Label(ctrl_frame, text="Cam:",font=(Theme.FONT_MONO, Theme.FONT_SIZE_M)).pack(side=tk.LEFT, padx=(0, 2))
-        self._cam_dot = tk.Label(ctrl_frame, text="●", fg="#888888", font=(Theme.FONT_MONO, Theme.FONT_SIZE_M))
-        self._cam_dot.pack(side=tk.LEFT, padx=(0, 3))
-        self._cam_lbl = tk.Label(ctrl_frame, text="Inactive",font=(Theme.FONT_MONO, Theme.FONT_SIZE_M))
-        self._cam_lbl.pack(side=tk.LEFT)
 
         # ── Row 1: Info placeholder sections ─────────────────────────────────
         info_frame = tk.Frame(self)
@@ -77,12 +57,6 @@ class ConnectionPanel(tk.Frame):
         val = tk.Label(cell, text=default, font=(Theme.FONT_MONO, Theme.FONT_SIZE_M,"bold"))
         val.pack(anchor="w")
         return val
-
-    def _set_camera_status(self, status: str):
-        color = CAMERA_COLORS.get(status, "#888888")
-        label = status.capitalize()
-        self._cam_dot.config(fg=color)
-        self._cam_lbl.config(text=label,font=(Theme.FONT_MONO, Theme.FONT_SIZE_M))
 
     # ── Public helpers (call these from your camera/telemetry callbacks) ──────
 
@@ -108,24 +82,12 @@ class ConnectionPanel(tk.Frame):
     def _toggle(self):
         if self.conn.state == ConnState.CONNECTED:
             self.conn.disconnect()
-            self._set_camera_status("inactive")
-            self.camera.stop()
         else:
-            host = "192.168.4.1"          # fixed target — no longer user-editable
-            port = int(self._port_var.get())
-            self._set_camera_status("starting")
-            self.conn.connect(host, port)
-            self.camera.url = f"http://{host}/stream"
-            self.camera.start()
+            host = "192.168.4.1" 
+            self.conn.connect(host)
 
     def _on_state_change(self, state: ConnState):
         color = STATE_COLORS.get(state, "#888888")
         self._conn_dot.config(fg=color)
         self._conn_lbl.config(text=state.value)
         self._btn.config(text="Disconnect" if state == ConnState.CONNECTED else "Connect")
-
-        # Mirror camera status to connection state where appropriate
-        if state == ConnState.CONNECTED:
-            self._set_camera_status("active")
-        elif state in (ConnState.DISCONNECTED, ConnState.ERROR):
-            self._set_camera_status("inactive" if state == ConnState.DISCONNECTED else "error")

@@ -1,10 +1,10 @@
 import threading
-from core.protocol import deserialize, is_valid
-
+from config import HOST
+# Receive thread — reads socket, puts messages on rx_queue
 class RXThread(threading.Thread):
-    def __init__(self, client, rx_queue, stop_event):
+    def __init__(self, session, rx_queue, stop_event):
         super().__init__(daemon=True)
-        self.client     = client
+        self.session    = session
         self.rx_queue   = rx_queue
         self.stop_event = stop_event
 
@@ -12,10 +12,8 @@ class RXThread(threading.Thread):
     def run(self):
         while not self.stop_event.is_set():
             try:
-                line = self.client.receive_line()
-                msg  = deserialize(line)
-                if msg and is_valid(msg):
-                    if not self.rx_queue.full():
-                        self.rx_queue.put(msg)
+                resp = self._session.get(f"{HOST}/tlm", timeout=2)
+                data = resp.json()
+                self.rx_queue.put(data)
             except Exception:
                 break  # socket died — connection manager will handle reconnect

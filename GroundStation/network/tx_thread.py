@@ -2,6 +2,7 @@ import threading
 import queue
 from core.protocol import serialize
 
+# Transmit thread — reads tx_queue, sends to socket
 class TXThread(threading.Thread):
     def __init__(self, client, tx_queue, stop_event):
         super().__init__(daemon=True)

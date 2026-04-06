@@ -15,11 +15,10 @@ import queue
 POLL_INTERVAL_MS = 50
 
 class App:
-    def __init__(self, root, telemetry, conn, camera, rx_queue, tx_queue, frame_queue):
+    def __init__(self, root, telemetry, conn, rx_queue, tx_queue, frame_queue):
         self.root        = root
         self.telemetry   = telemetry
         self.conn        = conn
-        self.camera      = camera
         self.rx_queue    = rx_queue
         self.tx_queue    = tx_queue
         self.frame_queue = frame_queue
@@ -45,7 +44,7 @@ class App:
         self.middle_frame.pack(side="left", fill="both", expand=True)
         self.right_frame.pack(side="left", fill="both", expand=True)
 
-        self.conn_panel  = ConnectionPanel(self.left_frame, self.conn, self.camera)
+        self.conn_panel  = ConnectionPanel(self.left_frame, self.conn)
         self.cmd_panel   = CommandPanel(self.left_frame, self.tx_queue)
         self.cam_panel   = CameraPanel(self.left_frame, self.frame_queue)
 
@@ -94,5 +93,4 @@ class App:
 
     def on_close(self):
         self.conn.disconnect()
-        self.camera.stop()
         self.root.destroy()
