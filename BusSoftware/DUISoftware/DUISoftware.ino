@@ -212,3 +212,13 @@ String buildTelemetryJson() {
   serializeJson(doc, out);
   return out;
 }
+
+void applyOV3660Corrections() {
+  sensor_t* s = esp_camera_sensor_get();
+  if (!s) return;
+
+  // Orientation — OV3660 on most ESP32-S3 carrier boards is mounted upside-down
+  s->set_vflip(s, 1);        // flip vertically
+  s->set_hmirror(s, 0);      // set to 1 if image is also horizontally mirrored
+
+}
