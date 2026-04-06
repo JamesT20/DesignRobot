@@ -11,6 +11,7 @@ class RXThread(threading.Thread):
     # runs on thread creation
     def run(self):
         while not self.stop_event.is_set():
+            print('rx thread running')
             try:
                 resp = self._session.get(f"{HOST}/tlm", timeout=2)
                 data = resp.json()

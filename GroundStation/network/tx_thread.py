@@ -13,6 +13,7 @@ class TXThread(threading.Thread):
     # runs on thread creation
     def run(self):
         while not self.stop_event.is_set():
+            print('tx thread running')
             try:
                 msg  = self.tx_queue.get(timeout=0.1)
                 data = serialize(msg)

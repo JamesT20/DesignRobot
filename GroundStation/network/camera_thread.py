@@ -12,6 +12,7 @@ class CameraThread(threading.Thread):
     def run(self):
         while not self.stop_event.is_set():
             try:
+                print('camera thread running')
                 with self.session.get(f"{HOST}/stream", stream=True, timeout=10) as resp:
                     buf = b""
                     for chunk in resp.iter_content(chunk_size=16384):
@@ -26,5 +27,5 @@ class CameraThread(threading.Thread):
                             jpg = buf[start:end + 2]
                             buf = buf[end + 2:]
                             self.rx_queue.put(jpg)
-            except Exception:
-                pass
+            except Exception as e:
+                print(e)
