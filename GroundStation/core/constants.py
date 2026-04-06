@@ -42,7 +42,6 @@ class TLM:
     SYS_PACKET_NUM  = "SYS_PACKET_NUM"
     SYS_MODE        = "SYS_MODE"
     SYS_CPU_TEMP    = "SYS_CPU_TEMP"
-    SYS_WIFI_RSSI   = "SYS_WIFI_RSSI"
     # Camera
     IMG_ENDPOINT    = "IMG_ENDPOINT"
 
