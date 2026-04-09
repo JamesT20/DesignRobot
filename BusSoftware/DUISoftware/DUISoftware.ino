@@ -14,6 +14,8 @@
 #include <ArduinoJson.h>
 #include "esp_camera.h"
 #include <ESPAsyncWebServer.h>
+#include <Wire.h>
+#include <MPU6050.h>
 
 ///// Set important constants /////
 
@@ -35,6 +37,10 @@
 #define HREF_GPIO_NUM    7
 #define PCLK_GPIO_NUM   13
 
+// I2C pins for MPU6050
+#define IMU_SDA_PIN     20
+#define IMU_SCL_PIN     19
+
 // Camera Config
 #define MJPEG_BOUNDARY     "frame"
 #define MJPEG_CONTENT_TYPE "multipart/x-mixed-replace;boundary=" MJPEG_BOUNDARY
@@ -44,31 +50,56 @@ const char* ssid     = "PROJECT_DUI_ESP32";
 const char* password = "12345678";
 
 // Single async server on port 80
-// Telemetry → GET /tlm
-// MJPEG     → GET /stream
 AsyncWebServer server(80);
 
-unsigned long lastLoopTime = 0;
+// MPU6050
+MPU6050 mpu;
+
+// IMU state — updated every loop iteration
+struct ImuData {
+  float accelX, accelY, accelZ;   // m/s²
+  float gyroX,  gyroY,  gyroZ;    // °/s
+  float roll, pitch, heading;      // degrees
+} imu = {};
+
+// Complementary filter coefficient (0 = trust gyro only, 1 = trust accel only)
+static constexpr float ALPHA = 0.96f;
+
+unsigned long lastLoopTime  = 0;
+unsigned long lastImuTime   = 0;
 uint32_t seq = 0;
 
 ///////////////////////////////////////////////////////// END INIT ///////////////////////////////////////////////////////////////
 
-// Forward declarations
 void applyOV3660Corrections();
 String buildTelemetryJson();
+void updateIMU();
 
 ///////////////////////////////////////////////////////// SETUP //////////////////////////////////////////////////////////////////
 
 void setup() {
   Serial.begin(115200);
 
-  // Start as Access Point
+  // ── MPU6050 init ────────────────────────────────────────────────────────────
+  Wire.begin(IMU_SDA_PIN, IMU_SCL_PIN);
+  mpu.initialize();
+
+  // Remove built-in offsets; calibrate on a level surface if needed
+  mpu.setXAccelOffset(0);
+  mpu.setYAccelOffset(0);
+  mpu.setZAccelOffset(0);
+  mpu.setXGyroOffset(0);
+  mpu.setYGyroOffset(0);
+  mpu.setZGyroOffset(0);
+
+  lastImuTime = millis();
+
+  // ── WiFi Access Point ───────────────────────────────────────────────────────
   WiFi.softAP(ssid, password);
   Serial.println("AP Started!");
-  Serial.println(WiFi.softAPIP());  // Usually 192.168.4.1
+  Serial.println(WiFi.softAPIP());
 
   // ── Telemetry endpoint ──────────────────────────────────────────────────────
-  // Returns a single JSON snapshot; poll from the GCS at whatever rate you like.
   server.on("/tlm", HTTP_GET, [](AsyncWebServerRequest* request) {
     String json = buildTelemetryJson();
     request->send(200, "application/json", json);
@@ -76,7 +107,6 @@ void setup() {
 
   // ── MJPEG stream endpoint ───────────────────────────────────────────────────
   server.on("/stream", HTTP_GET, [](AsyncWebServerRequest* request) {
-    // AsyncResponseStream lets us push chunks without blocking the server task.
     AsyncResponseStream* response =
         request->beginResponseStream(MJPEG_CONTENT_TYPE);
     response->addHeader("Cache-Control", "no-cache");
@@ -88,7 +118,6 @@ void setup() {
       return;
     }
 
-    // Write one MJPEG part
     response->printf(
         "--" MJPEG_BOUNDARY "\r\n"
         "Content-Type: image/jpeg\r\n"
@@ -132,7 +161,7 @@ void setup() {
   config.pin_reset    = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size   = FRAMESIZE_VGA;
+  config.frame_size   = FRAMESIZE_QVGA;
   config.jpeg_quality = 12;
   config.fb_count     = 2;
   config.grab_mode    = CAMERA_GRAB_LATEST;
@@ -147,16 +176,52 @@ void setup() {
 ///////////////////////////////////////////////////////// LOOP ///////////////////////////////////////////////////////////////////
 
 void loop() {
-  // ESPAsyncWebServer handles requests on its own FreeRTOS task.
-  // Use loop() for anything time-sensitive: motor control, IMU reads, etc.
   lastLoopTime = millis();
-
-  // Example: update seq counter so telemetry always reflects latest value
-  // (real sensor reads would go here)
+  updateIMU();
   delay(10);
 }
 
 ///////////////////////////////////////////////////////// HELPERS ////////////////////////////////////////////////////////////////
+
+void updateIMU() {
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  // ── Scale raw values ────────────────────────────────────────────────────────
+  // Default full-scale: ±2g accel, ±250°/s gyro
+  constexpr float ACCEL_SCALE = 9.80665f / 16384.0f;  // LSB → m/s²
+  constexpr float GYRO_SCALE  = 1.0f    / 131.0f;     // LSB → °/s
+
+  imu.accelX = ax * ACCEL_SCALE;
+  imu.accelY = ay * ACCEL_SCALE;
+  imu.accelZ = az * ACCEL_SCALE;
+  imu.gyroX  = gx * GYRO_SCALE;
+  imu.gyroY  = gy * GYRO_SCALE;
+  imu.gyroZ  = gz * GYRO_SCALE;
+
+  // ── Complementary filter for roll & pitch ───────────────────────────────────
+  unsigned long now = millis();
+  float dt = (now - lastImuTime) / 1000.0f;   // seconds
+  lastImuTime = now;
+
+  // Accel-derived angles (reliable when stationary, noisy when moving)
+  float accelRoll  = atan2f(imu.accelY, imu.accelZ) * 180.0f / M_PI;
+  float accelPitch = atan2f(-imu.accelX,
+                             sqrtf(imu.accelY * imu.accelY +
+                                   imu.accelZ * imu.accelZ)) * 180.0f / M_PI;
+
+  // Fuse with gyro integration
+  imu.roll    = ALPHA * (imu.roll  + imu.gyroX * dt) + (1.0f - ALPHA) * accelRoll;
+  imu.pitch   = ALPHA * (imu.pitch + imu.gyroY * dt) + (1.0f - ALPHA) * accelPitch;
+
+  // Heading: gyro-integrated yaw only — drifts over time.
+  // Replace with a magnetometer (e.g. HMC5883L / QMC5883L) for true heading.
+  imu.heading += imu.gyroZ * dt;
+
+  // Keep heading in [0, 360)
+  if (imu.heading <   0.0f) imu.heading += 360.0f;
+  if (imu.heading >= 360.0f) imu.heading -= 360.0f;
+}
 
 String buildTelemetryJson() {
   StaticJsonDocument<1536> doc;
@@ -164,11 +229,11 @@ String buildTelemetryJson() {
   doc["type"] = "tlm";
 
   // System
-  doc["SYS_UPTIME"]    = millis() / 1000;
-  doc["SYS_HEAP_FREE"] = ESP.getFreeHeap();
-  doc["SYS_LOOP_TIME"] = millis() - lastLoopTime;
+  doc["SYS_UPTIME"]     = millis() / 1000;
+  doc["SYS_HEAP_FREE"]  = ESP.getFreeHeap();
+  doc["SYS_LOOP_TIME"]  = millis() - lastLoopTime;
   doc["SYS_PACKET_NUM"] = seq++;
-  doc["SYS_MODE"]      = "TEST";
+  doc["SYS_MODE"]       = "TEST";
 
   // Power
   doc["PWR_BAT_VOLT"]  = 0;
@@ -178,22 +243,19 @@ String buildTelemetryJson() {
   doc["PWR_MOT2_VOLT"] = 0;
   doc["PWR_MOT2_CUR"]  = 0;
 
-  // IMU
-  doc["IMU_ACCEL_X"] = 0;
-  doc["IMU_ACCEL_Y"] = 0;
-  doc["IMU_ACCEL_Z"] = 0;
-  doc["IMU_GYRO_X"]  = 0;
-  doc["IMU_GYRO_Y"]  = 0;
-  doc["IMU_GYRO_Z"]  = 0;
-  doc["IMU_HEADING"] = 0;
-  doc["IMU_ROLL"]    = 0;
-  doc["IMU_PITCH"]   = 0;
+  // IMU — real values
+  doc["IMU_ACCEL_X"] = serialized(String(imu.accelX, 3));
+  doc["IMU_ACCEL_Y"] = serialized(String(imu.accelY, 3));
+  doc["IMU_ACCEL_Z"] = serialized(String(imu.accelZ, 3));
+  doc["IMU_GYRO_X"]  = serialized(String(imu.gyroX,  3));
+  doc["IMU_GYRO_Y"]  = serialized(String(imu.gyroY,  3));
+  doc["IMU_GYRO_Z"]  = serialized(String(imu.gyroZ,  3));
+  doc["IMU_HEADING"] = serialized(String(imu.heading, 1));
+  doc["IMU_ROLL"]    = serialized(String(imu.roll,    1));
+  doc["IMU_PITCH"]   = serialized(String(imu.pitch,   1));
 
   // Temp
   doc["TMP_PROBE"] = 0;
-
-  // Camera
-  doc["IMG_ENDPOINT"] = "http://192.168.4.1/stream";
 
   // Motors
   doc["MOT_1_SPEED"] = 0;
@@ -216,9 +278,6 @@ String buildTelemetryJson() {
 void applyOV3660Corrections() {
   sensor_t* s = esp_camera_sensor_get();
   if (!s) return;
-
-  // Orientation — OV3660 on most ESP32-S3 carrier boards is mounted upside-down
-  s->set_vflip(s, 1);        // flip vertically
-  s->set_hmirror(s, 0);      // set to 1 if image is also horizontally mirrored
-
+  s->set_vflip(s, 1);
+  s->set_hmirror(s, 0);
 }
