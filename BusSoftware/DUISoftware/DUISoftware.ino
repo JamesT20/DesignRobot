@@ -3,7 +3,6 @@
 // Vehicle software for PROJECT DUI robot
 //
 // Created March 2026 by James Torok
-// Rewritten to use ESPAsyncWebServer
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -16,10 +15,11 @@
 #include <ESPAsyncWebServer.h>
 #include <Wire.h>
 #include <MPU6050.h>
+#include <Adafruit_INA219.h>
 
 ///// Set important constants /////
 
-// Pin Definitions
+// ── Camera Pin Definitions ──────────────────────────────────────────────────
 #define PWDN_GPIO_NUM   -1
 #define RESET_GPIO_NUM  -1
 #define XCLK_GPIO_NUM   15
@@ -37,9 +37,19 @@
 #define HREF_GPIO_NUM    7
 #define PCLK_GPIO_NUM   13
 
-// I2C pins for MPU6050
+// ── I2C pins for MPU6050 ─────────────────────────────────────────────────
 #define IMU_SDA_PIN     20
 #define IMU_SCL_PIN     19
+
+// ── L298N Motor Driver Pins ─────────────────────────────────────────────────
+
+// Motor A (Left)
+#define MOT_A_IN1  1    // Direction control A
+#define MOT_A_IN2  2    // Direction control B
+
+// Motor B (Right)
+#define MOT_B_IN3  3    // Direction control A
+#define MOT_B_IN4  14   // Direction control B
 
 // Camera Config
 #define MJPEG_BOUNDARY     "frame"
@@ -52,60 +62,226 @@ const char* password = "12345678";
 // Single async server on port 80
 AsyncWebServer server(80);
 
-// MPU6050
+// ── INA219 Current Sensors ───────────────────────────────────────────────────
+Adafruit_INA219 ina219_mot1(0x44);   // A1 soldered — battery monitor
+Adafruit_INA219 ina219_mot2(0x45);   // A1+A0 soldered — motor monitor
+
+struct PowerData {
+  float batVolt, batCur;
+  float motVolt, motCur;
+} pwr = {};
+
+// ── MPU6050 ──────────────────────────────────────────────────────────────────
 MPU6050 mpu;
 
-// IMU state — updated every loop iteration
 struct ImuData {
-  float accelX, accelY, accelZ;   // m/s²
-  float gyroX,  gyroY,  gyroZ;    // °/s
-  float roll, pitch, heading;      // degrees
+  float accelX, accelY, accelZ;
+  float gyroX,  gyroY,  gyroZ;
+  float roll, pitch, heading;
 } imu = {};
 
-// Complementary filter coefficient (0 = trust gyro only, 1 = trust accel only)
 static constexpr float ALPHA = 0.96f;
 
-unsigned long lastLoopTime  = 0;
-unsigned long lastImuTime   = 0;
-uint32_t seq = 0;
+// ── Motor State ───────────────────────────────────────────────────────────────
+struct MotorState {
+  int8_t dirCmd;   // -1 reverse, 0 stop, 1 forward (last commanded value)
+  int8_t dir;      // -1 reverse, 0 stop, 1 forward  (actual hardware state)
+} motA = {}, motB = {};
+
+// ── Fault Flags ───────────────────────────────────────────────────────────────
+struct Faults {
+  bool imuTilt    = false;
+  bool motStall1  = false;
+  bool motStall2  = false;
+} faults;
+
+// ── Command Queue ─────────────────────────────────────────────────────────────
+
+// All supported command types
+enum CmdType {
+  CMD_NONE = 0,
+  CMD_MOT_SET_DIR,      // Set left & right motor direction (-1, 0, or 1)
+  CMD_MOT_STOP,         // Immediately stop both motors
+  CMD_SYS_WAIT,         // Wait N milliseconds
+  CMD_SYS_REBOOT,       // Reboot ESP32
+  CMD_SYS_CLEAR_FAULTS, // Clear all fault flags
+};
+
+struct Command {
+  CmdType  type     = CMD_NONE;
+  int32_t  argA     = 0;   // left_dir / ms / generic
+  int32_t  argB     = 0;   // right_dir
+  uint32_t seqIndex = 0;   // position in the uploaded sequence
+};
+
+// Circular queue
+static constexpr uint8_t CMD_QUEUE_SIZE = 32;
+Command cmdQueue[CMD_QUEUE_SIZE];
+volatile uint8_t cmdHead = 0;   // next slot to write
+volatile uint8_t cmdTail = 0;   // next slot to read
+volatile bool    cmdBusy = false;
+
+// Sequence tracking
+volatile uint32_t seqTotal     = 0;   // total commands in the last upload
+volatile uint32_t seqCurrent   = 0;   // index of command currently executing
+volatile bool     seqRunning   = false;
+
+// Status string (last action, error, etc.)
+String lastStatus = "idle";
+
+unsigned long lastLoopTime = 0;
+unsigned long lastImuTime  = 0;
+uint32_t      pktSeq       = 0;
 
 ///////////////////////////////////////////////////////// END INIT ///////////////////////////////////////////////////////////////
 
+// Forward declarations
 void applyOV3660Corrections();
 String buildTelemetryJson();
 void updateIMU();
+void updatePower();
+void setMotorA(int dirCmd);
+void setMotorB(int dirCmd);
+void stopAllMotors();
+bool enqueueCmd(const Command& cmd);
+Command dequeueCmd();
+bool queueEmpty();
+void processCommandQueue();
+CmdType parseCmdType(const char* str);
 
 ///////////////////////////////////////////////////////// SETUP //////////////////////////////////////////////////////////////////
 
 void setup() {
   Serial.begin(115200);
 
-  // ── MPU6050 init ────────────────────────────────────────────────────────────
+  // ── Motor GPIO init ──────────────────────────────────────────────────────
+  pinMode(MOT_A_IN1, OUTPUT);
+  pinMode(MOT_A_IN2, OUTPUT);
+  pinMode(MOT_B_IN3, OUTPUT);
+  pinMode(MOT_B_IN4, OUTPUT);
+
+  stopAllMotors();
+
+  // ── MPU6050 init ─────────────────────────────────────────────────────────
   Wire.begin(IMU_SDA_PIN, IMU_SCL_PIN);
   mpu.initialize();
-
-  // Remove built-in offsets; calibrate on a level surface if needed
   mpu.setXAccelOffset(0);
   mpu.setYAccelOffset(0);
   mpu.setZAccelOffset(0);
   mpu.setXGyroOffset(0);
   mpu.setYGyroOffset(0);
   mpu.setZGyroOffset(0);
-
   lastImuTime = millis();
 
-  // ── WiFi Access Point ───────────────────────────────────────────────────────
+  // ── INA219 init ───────────────────────────────────────────────────────────
+  if (!ina219_mot1.begin()) Serial.println("INA219 (0x44) not found");
+  if (!ina219_mot2.begin()) Serial.println("INA219 (0x45) not found");
+
+  // ── WiFi Access Point ─────────────────────────────────────────────────────
   WiFi.softAP(ssid, password);
-  Serial.println("AP Started!");
+  Serial.print("AP Started — IP: ");
   Serial.println(WiFi.softAPIP());
 
-  // ── Telemetry endpoint ──────────────────────────────────────────────────────
+  // ── /tlm — Telemetry ──────────────────────────────────────────────────────
   server.on("/tlm", HTTP_GET, [](AsyncWebServerRequest* request) {
-    String json = buildTelemetryJson();
-    request->send(200, "application/json", json);
+    request->send(200, "application/json", buildTelemetryJson());
   });
 
-  // ── MJPEG stream endpoint ───────────────────────────────────────────────────
+  // ── /cmd — Receive command sequence (JSON array) ──────────────────────────
+  server.on(
+    "/cmd", HTTP_POST,
+    [](AsyncWebServerRequest* request) {
+      if (!request->_tempObject) {
+        request->send(400, "application/json",
+                      "{\"error\":\"empty body\"}");
+      }
+    },
+    nullptr,
+    [](AsyncWebServerRequest* request,
+       uint8_t*               data,
+       size_t                 len,
+       size_t                 index,
+       size_t                 total) {
+
+      if (index == 0) {
+        request->_tempObject = new String();
+      }
+      String* body = reinterpret_cast<String*>(request->_tempObject);
+      body->concat(reinterpret_cast<char*>(data), len);
+
+      if (index + len >= total) {
+        DynamicJsonDocument doc(4096);
+        DeserializationError err = deserializeJson(doc, *body);
+        delete body;
+        request->_tempObject = nullptr;
+
+        if (err || !doc.is<JsonArray>()) {
+          request->send(400, "application/json",
+                        "{\"error\":\"invalid JSON array\"}");
+          return;
+        }
+
+        JsonArray arr = doc.as<JsonArray>();
+
+        cmdHead = cmdTail = 0;
+        seqCurrent = 0;
+        seqTotal   = arr.size();
+        seqRunning = seqTotal > 0;
+
+        uint32_t accepted = 0;
+        for (JsonObject obj : arr) {
+          if (accepted >= CMD_QUEUE_SIZE) break;
+          const char* cmdStr = obj["cmd"] | "";
+          CmdType type = parseCmdType(cmdStr);
+          if (type == CMD_NONE) continue;
+
+          Command c;
+          c.type     = type;
+          c.seqIndex = accepted;
+
+          switch (type) {
+            case CMD_MOT_SET_DIR:
+              c.argA = constrain((int32_t)obj["left_dir"]  | 0, -1, 1);
+              c.argB = constrain((int32_t)obj["right_dir"] | 0, -1, 1);
+              break;
+            case CMD_SYS_WAIT:
+              if (obj.containsKey("ms")) {
+                c.argA = (int32_t)obj["ms"];
+              } else {
+                c.argA = (int32_t)(((float)obj["seconds"] | 0.0f) * 1000.0f);
+              }
+              c.argA = max(c.argA, 0);
+              break;
+            default:
+              break;
+          }
+
+          if (enqueueCmd(c)) accepted++;
+        }
+
+        lastStatus = "sequence loaded: " + String(accepted) + " cmd(s)";
+
+        String resp = "{\"accepted\":" + String(accepted) +
+                      ",\"total\":"    + String(seqTotal) + "}";
+        request->send(200, "application/json", resp);
+      }
+    }
+  );
+
+  // ── /cmd/stop — Emergency stop ─────────────────────────────────────────────
+  server.on("/cmd/stop", HTTP_POST, [](AsyncWebServerRequest* request) {
+    cmdHead = cmdTail = 0;
+    seqRunning  = false;
+    seqCurrent  = 0;
+    cmdBusy     = false;
+    stopAllMotors();
+    faults.motStall1 = false;
+    faults.motStall2 = false;
+    lastStatus = "ESTOP";
+    request->send(200, "application/json", "{\"status\":\"stopped\"}");
+  });
+
+  // ── MJPEG stream ──────────────────────────────────────────────────────────
   server.on("/stream", HTTP_GET, [](AsyncWebServerRequest* request) {
     AsyncResponseStream* response =
         request->beginResponseStream(MJPEG_CONTENT_TYPE);
@@ -117,29 +293,25 @@ void setup() {
       request->send(503, "text/plain", "Camera frame unavailable");
       return;
     }
-
     response->printf(
         "--" MJPEG_BOUNDARY "\r\n"
         "Content-Type: image/jpeg\r\n"
-        "Content-Length: %u\r\n"
-        "\r\n",
-        fb->len
-    );
+        "Content-Length: %u\r\n\r\n",
+        fb->len);
     response->write(fb->buf, fb->len);
     response->print("\r\n");
-
     esp_camera_fb_return(fb);
     request->send(response);
   });
 
-  // ── 404 fallback ────────────────────────────────────────────────────────────
+  // ── 404 fallback ──────────────────────────────────────────────────────────
   server.onNotFound([](AsyncWebServerRequest* request) {
     request->send(404, "text/plain", "Not found");
   });
 
   server.begin();
 
-  // ── Camera init ─────────────────────────────────────────────────────────────
+  // ── Camera init ───────────────────────────────────────────────────────────
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer   = LEDC_TIMER_0;
@@ -169,7 +341,6 @@ void setup() {
   if (esp_camera_init(&config) != ESP_OK) {
     Serial.println("Camera init failed");
   }
-
   applyOV3660Corrections();
 }
 
@@ -178,19 +349,160 @@ void setup() {
 void loop() {
   lastLoopTime = millis();
   updateIMU();
+  updatePower();
+  processCommandQueue();
   delay(10);
 }
 
+///////////////////////////////////////////////////////// MOTOR CONTROL //////////////////////////////////////////////////////////
+
+// Set Motor A direction. dirCmd: 1 = forward, -1 = reverse, 0 = stop/brake.
+void setMotorA(int dirCmd) {
+  dirCmd = constrain(dirCmd, -1, 1);
+  motA.dirCmd = dirCmd;
+  motA.dir    = dirCmd;
+
+  if (dirCmd > 0) {
+    digitalWrite(MOT_A_IN1, HIGH);
+    digitalWrite(MOT_A_IN2, LOW);
+  } else if (dirCmd < 0) {
+    digitalWrite(MOT_A_IN1, LOW);
+    digitalWrite(MOT_A_IN2, HIGH);
+  } else {
+    // Brake: both HIGH (L298N short-brake)
+    digitalWrite(MOT_A_IN1, HIGH);
+    digitalWrite(MOT_A_IN2, HIGH);
+  }
+}
+
+// Set Motor B direction. Same convention as setMotorA.
+void setMotorB(int dirCmd) {
+  dirCmd = constrain(dirCmd, -1, 1);
+  motB.dirCmd = dirCmd;
+  motB.dir    = dirCmd;
+
+  if (dirCmd > 0) {
+    digitalWrite(MOT_B_IN3, HIGH);
+    digitalWrite(MOT_B_IN4, LOW);
+  } else if (dirCmd < 0) {
+    digitalWrite(MOT_B_IN3, LOW);
+    digitalWrite(MOT_B_IN4, HIGH);
+  } else {
+    digitalWrite(MOT_B_IN3, HIGH);
+    digitalWrite(MOT_B_IN4, HIGH);
+  }
+}
+
+void stopAllMotors() {
+  setMotorA(0);
+  setMotorB(0);
+}
+
+///////////////////////////////////////////////////////// COMMAND QUEUE //////////////////////////////////////////////////////////
+
+bool enqueueCmd(const Command& cmd) {
+  uint8_t next = (cmdHead + 1) % CMD_QUEUE_SIZE;
+  if (next == cmdTail) return false;
+  cmdQueue[cmdHead] = cmd;
+  cmdHead = next;
+  return true;
+}
+
+Command dequeueCmd() {
+  Command c;
+  if (cmdHead == cmdTail) return c;
+  c = cmdQueue[cmdTail];
+  cmdTail = (cmdTail + 1) % CMD_QUEUE_SIZE;
+  return c;
+}
+
+bool queueEmpty() {
+  return cmdHead == cmdTail;
+}
+
+CmdType parseCmdType(const char* str) {
+  if (strcmp(str, "CMD_MOT_SET_DIR")      == 0) return CMD_MOT_SET_DIR;
+  if (strcmp(str, "CMD_MOT_STOP")         == 0) return CMD_MOT_STOP;
+  if (strcmp(str, "CMD_SYS_WAIT")         == 0) return CMD_SYS_WAIT;
+  if (strcmp(str, "CMD_SYS_REBOOT")       == 0) return CMD_SYS_REBOOT;
+  if (strcmp(str, "CMD_SYS_CLEAR_FAULTS") == 0 ||
+      strcmp(str, "SYS_CLEAR_FAULTS")     == 0) return CMD_SYS_CLEAR_FAULTS;
+  return CMD_NONE;
+}
+
+void processCommandQueue() {
+  if (cmdBusy) return;
+  if (queueEmpty()) {
+    if (seqRunning) {
+      seqRunning = false;
+      lastStatus = "sequence complete";
+      Serial.println("[CMD] Sequence complete");
+    }
+    return;
+  }
+
+  Command c = dequeueCmd();
+  seqCurrent = c.seqIndex;
+  Serial.printf("[CMD] Executing #%u type=%d\n", c.seqIndex, (int)c.type);
+
+  switch (c.type) {
+
+    case CMD_MOT_SET_DIR:
+      setMotorA((int)c.argA);
+      setMotorB((int)c.argB);
+      lastStatus = "MOT_SET_DIR L=" + String(c.argA) + " R=" + String(c.argB);
+      break;
+
+    case CMD_MOT_STOP:
+      stopAllMotors();
+      lastStatus = "MOT_STOP";
+      break;
+
+    case CMD_SYS_WAIT: {
+      static unsigned long waitUntil = 0;
+      waitUntil = millis() + (unsigned long)c.argA;
+      cmdBusy   = true;
+      lastStatus = "WAIT " + String(c.argA) + "ms";
+
+      while (millis() < waitUntil) {
+        delay(1);
+      }
+      cmdBusy = false;
+      break;
+    }
+
+    case CMD_SYS_REBOOT:
+      stopAllMotors();
+      lastStatus = "REBOOTING";
+      Serial.println("[CMD] REBOOT");
+      delay(500);
+      ESP.restart();
+      break;
+
+    case CMD_SYS_CLEAR_FAULTS:
+      faults.imuTilt   = false;
+      faults.motStall1 = false;
+      faults.motStall2 = false;
+      lastStatus = "FAULTS CLEARED";
+      break;
+
+}
+
 ///////////////////////////////////////////////////////// HELPERS ////////////////////////////////////////////////////////////////
+
+void updatePower() {
+  pwr.mot1Volt = ina219_mot1.getBusVoltage_V();
+  pwr.mot1Cur  = ina219_mot1.getCurrent_mA();
+  pwr.mot2Volt = ina219_mot2.getBusVoltage_V();
+  pwr.mot2Cur  = ina219_mot2.getCurrent_mA();
+}
 
 void updateIMU() {
   int16_t ax, ay, az, gx, gy, gz;
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
-  // ── Scale raw values ────────────────────────────────────────────────────────
-  // Default full-scale: ±2g accel, ±250°/s gyro
-  constexpr float ACCEL_SCALE = 9.80665f / 16384.0f;  // LSB → m/s²
-  constexpr float GYRO_SCALE  = 1.0f    / 131.0f;     // LSB → °/s
+  constexpr float ACCEL_SCALE = 9.80665f / 16384.0f;
+  constexpr float GYRO_SCALE  = 1.0f    / 131.0f;
 
   imu.accelX = ax * ACCEL_SCALE;
   imu.accelY = ay * ACCEL_SCALE;
@@ -199,32 +511,24 @@ void updateIMU() {
   imu.gyroY  = gy * GYRO_SCALE;
   imu.gyroZ  = gz * GYRO_SCALE;
 
-  // ── Complementary filter for roll & pitch ───────────────────────────────────
   unsigned long now = millis();
-  float dt = (now - lastImuTime) / 1000.0f;   // seconds
+  float dt = (now - lastImuTime) / 1000.0f;
   lastImuTime = now;
 
-  // Accel-derived angles (reliable when stationary, noisy when moving)
   float accelRoll  = atan2f(imu.accelY, imu.accelZ) * 180.0f / M_PI;
   float accelPitch = atan2f(-imu.accelX,
                              sqrtf(imu.accelY * imu.accelY +
                                    imu.accelZ * imu.accelZ)) * 180.0f / M_PI;
 
-  // Fuse with gyro integration
   imu.roll    = ALPHA * (imu.roll  + imu.gyroX * dt) + (1.0f - ALPHA) * accelRoll;
   imu.pitch   = ALPHA * (imu.pitch + imu.gyroY * dt) + (1.0f - ALPHA) * accelPitch;
-
-  // Heading: gyro-integrated yaw only — drifts over time.
-  // Replace with a magnetometer (e.g. HMC5883L / QMC5883L) for true heading.
   imu.heading += imu.gyroZ * dt;
-
-  // Keep heading in [0, 360)
-  if (imu.heading <   0.0f) imu.heading += 360.0f;
+  if (imu.heading <    0.0f) imu.heading += 360.0f;
   if (imu.heading >= 360.0f) imu.heading -= 360.0f;
 }
 
 String buildTelemetryJson() {
-  StaticJsonDocument<1536> doc;
+  StaticJsonDocument<2048> doc;
 
   doc["type"] = "tlm";
 
@@ -232,18 +536,23 @@ String buildTelemetryJson() {
   doc["SYS_UPTIME"]     = millis() / 1000;
   doc["SYS_HEAP_FREE"]  = ESP.getFreeHeap();
   doc["SYS_LOOP_TIME"]  = millis() - lastLoopTime;
-  doc["SYS_PACKET_NUM"] = seq++;
-  doc["SYS_MODE"]       = "TEST";
+  doc["SYS_PACKET_NUM"] = pktSeq++;
+  doc["SYS_MODE"]       = seqRunning ? "RUN" : "IDLE";
+  doc["SYS_STATUS"]     = lastStatus;
+
+  // Sequence
+  doc["SEQ_RUNNING"]  = seqRunning;
+  doc["SEQ_CURRENT"]  = seqCurrent;
+  doc["SEQ_TOTAL"]    = seqTotal;
+  doc["SEQ_QUEUE"]    = (cmdHead - cmdTail + CMD_QUEUE_SIZE) % CMD_QUEUE_SIZE;
 
   // Power
-  doc["PWR_BAT_VOLT"]  = 0;
-  doc["PWR_BAT_CUR"]   = 0;
-  doc["PWR_MOT1_VOLT"] = 0;
-  doc["PWR_MOT1_CUR"]  = 0;
-  doc["PWR_MOT2_VOLT"] = 0;
-  doc["PWR_MOT2_CUR"]  = 0;
+  doc["PWR_MOT1_VOLT"] = serialized(String(pwr.mot1Volt, 2));
+  doc["PWR_MOT1_CUR"]  = serialized(String(pwr.mot1Cur,  1));
+  doc["PWR_MOT2_VOLT"] = serialized(String(pwr.mot2Volt, 2));
+  doc["PWR_MOT2_CUR"]  = serialized(String(pwr.mot2Cur,  1));
 
-  // IMU — real values
+  // IMU
   doc["IMU_ACCEL_X"] = serialized(String(imu.accelX, 3));
   doc["IMU_ACCEL_Y"] = serialized(String(imu.accelY, 3));
   doc["IMU_ACCEL_Z"] = serialized(String(imu.accelZ, 3));
@@ -254,21 +563,16 @@ String buildTelemetryJson() {
   doc["IMU_ROLL"]    = serialized(String(imu.roll,    1));
   doc["IMU_PITCH"]   = serialized(String(imu.pitch,   1));
 
-  // Temp
-  doc["TMP_PROBE"] = 0;
-
   // Motors
-  doc["MOT_1_SPEED"] = 0;
-  doc["MOT_1_DIR"]   = 0;
-  doc["MOT_1_PWM"]   = 0;
-  doc["MOT_2_SPEED"] = 0;
-  doc["MOT_2_DIR"]   = 0;
-  doc["MOT_2_PWM"]   = 0;
+  doc["MOT_1_DIR_CMD"] = motA.dirCmd;
+  doc["MOT_1_DIR"]     = motA.dir;
+  doc["MOT_2_DIR_CMD"] = motB.dirCmd;
+  doc["MOT_2_DIR"]     = motB.dir;
 
   // Faults
-  doc["FLT_IMU_TILT"]    = false;
-  doc["FLT_MOT_STALL_1"] = false;
-  doc["FLT_MOT_STALL_2"] = false;
+  doc["FLT_IMU_TILT"]    = faults.imuTilt;
+  doc["FLT_MOT_STALL_1"] = faults.motStall1;
+  doc["FLT_MOT_STALL_2"] = faults.motStall2;
 
   String out;
   serializeJson(doc, out);
