@@ -145,7 +145,7 @@ class OrientationPanel(tk.Frame):
 
         self._canvas = FigureCanvasTkAgg(self._fig, master=self)
         self._canvas.get_tk_widget().configure(highlightthickness=0)
-        self._canvas.get_tk_widget().pack(padx=4, pady=4)
+        self._canvas.get_tk_widget().pack(fill="both", expand=True, padx=4, pady=4)
 
         self._draw()
 

@@ -72,14 +72,14 @@ class App:
 
         self.conn_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
         self.cam_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
-        self.cmd_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.cmd_panel.pack(fill="both", expand=True, padx=Theme.PADDING_M, pady=Theme.PADDING_M)
        
         self.clock_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
-        self.view_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.view_panel.pack(fill="both", expand=True, padx=Theme.PADDING_M, pady=Theme.PADDING_M)
         self.fault_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
-        self.log_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.log_panel.pack(fill="both", expand=True, padx=Theme.PADDING_M, pady=Theme.PADDING_M)
 
-        self.tlm_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.tlm_panel.pack(fill="both", expand=True, padx=Theme.PADDING_M, pady=Theme.PADDING_M)
 
     def _poll(self):
         # Drain telemetry queue

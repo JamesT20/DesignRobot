@@ -59,7 +59,7 @@ SECTIONS = [
 
 # How many sections go in the left column before wrapping to the right.
 # With 8 sections total, 4/4 gives a balanced split. Adjust as needed.
-LEFT_COLUMN_SECTIONS = 3
+LEFT_COLUMN_SECTIONS = 4
 
 
 class TelemetryPanel(tk.Frame):
@@ -108,8 +108,14 @@ class TelemetryPanel(tk.Frame):
         """Place sections into two vertical sub-frames side by side."""
         left = tk.Frame(self)
         right = tk.Frame(self)
-        left.grid(row=0, column=0, sticky="n")
-        right.grid(row=0, column=1, sticky="n", padx=(8, 0))
+        left.grid(row=0, column=0, sticky="nsew")
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+        left.columnconfigure(0, weight=1)
+        right.columnconfigure(0, weight=1)
 
         for i, (section_name, fields) in enumerate(SECTIONS):
             col_frame = left if i < LEFT_COLUMN_SECTIONS else right

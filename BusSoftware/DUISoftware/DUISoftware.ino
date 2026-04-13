@@ -128,6 +128,12 @@ volatile uint8_t cmdHead = 0;   // next slot to write
 volatile uint8_t cmdTail = 0;   // next slot to read
 volatile bool    cmdBusy = false;
 
+// ── FIX: Non-blocking wait state (moved to file scope) ───────────────────────
+// Previously declared as 'static' inside the switch case, which caused the
+// ESTOP handler's cmdBusy=false to be ignored because the blocking while()
+// loop in loop() prevented the web server callbacks from ever resolving.
+static unsigned long waitUntil = 0;
+
 // Sequence tracking
 volatile uint32_t seqTotal     = 0;   // total commands in the last upload
 volatile uint32_t seqCurrent   = 0;   // index of command currently executing
@@ -431,6 +437,10 @@ void setup() {
 
   // ── /cmd/stop — Emergency stop ─────────────────────────────────────────────
   server.on("/cmd/stop", HTTP_POST, [](AsyncWebServerRequest* request) {
+    // ── FIX: Also clear waitUntil so the non-blocking wait check in
+    // processCommandQueue() resolves immediately on the next loop() tick.
+    waitUntil = 0;
+
     cmdHead = cmdTail = 0;
     seqRunning  = false;
     seqCurrent  = 0;
@@ -647,7 +657,25 @@ CmdType parseCmdType(const char* str) {
 }
 
 void processCommandQueue() {
-  if (cmdBusy) return;
+  // ── FIX: Non-blocking wait check ─────────────────────────────────────────
+  // Previously, CMD_SYS_WAIT used a blocking while(millis() < waitUntil) loop
+  // inside loop(), which prevented the async web server from ever dispatching
+  // the /cmd/stop callback while a wait was in progress — making ESTOP a no-op
+  // during any wait command.
+  //
+  // Now cmdBusy=true simply means "we are mid-wait; come back next tick".
+  // The ESTOP handler sets cmdBusy=false AND waitUntil=0, which causes the
+  // check below to fall through immediately on the next loop() iteration.
+  if (cmdBusy) {
+    if (millis() < waitUntil) {
+      return;   // still waiting — yield to loop() so the web server can run
+    }
+    // Wait elapsed (or cancelled by ESTOP setting waitUntil=0)
+    cmdBusy = false;
+    sendLog(LOG_DEBUG, "commands", "CMD_SYS_WAIT complete", "");
+    // Fall through to process the next command in the queue
+  }
+
   if (queueEmpty()) {
     if (seqRunning) {
       seqRunning = false;
@@ -690,30 +718,20 @@ void processCommandQueue() {
       }
       break;
 
-    case CMD_SYS_WAIT: {
-      static unsigned long waitUntil = 0;
+    case CMD_SYS_WAIT:
+      // ── FIX: No longer blocks. Set waitUntil and cmdBusy=true, then return.
+      // processCommandQueue() will be called again next loop() tick and the
+      // non-blocking check at the top will handle expiry / ESTOP cancellation.
       waitUntil = millis() + (unsigned long)c.argA;
       cmdBusy   = true;
       lastStatus = "WAIT " + String(c.argA) + "ms";
-      // [LOG] Wait started
       {
         char ctx[48];
         snprintf(ctx, sizeof(ctx), "{\"seq\":%u,\"wait_ms\":%d}", c.seqIndex, (int)c.argA);
         sendLog(LOG_DEBUG, "commands", "CMD_SYS_WAIT started", ctx);
       }
-
-      while (millis() < waitUntil) {
-        delay(1);
-      }
-      cmdBusy = false;
-      // [LOG] Wait complete
-      {
-        char ctx[48];
-        snprintf(ctx, sizeof(ctx), "{\"seq\":%u,\"wait_ms\":%d}", c.seqIndex, (int)c.argA);
-        sendLog(LOG_DEBUG, "commands", "CMD_SYS_WAIT complete", ctx);
-      }
+      // Return immediately — do NOT block here.
       break;
-    }
 
     case CMD_SYS_REBOOT:
       stopAllMotors();
