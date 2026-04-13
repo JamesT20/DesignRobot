@@ -15,6 +15,7 @@ class TXThread(threading.Thread):
         self.tx_queue   = tx_queue
         self.stop_event = stop_event
         self.session    = requests.Session()
+        self.session.headers.update({"Connection": "close"})  # ESP32 keep-alive bug
 
     def run(self):
         logger.info("TX thread started")
@@ -49,7 +50,7 @@ class TXThread(threading.Thread):
 
         elif endpoint == "/cmd":
             commands = msg.get("commands", [])
-            cmd_names = [c.get("name", "?") for c in commands]
+            cmd_names = [c.get("cmd", "?") for c in commands]
             logger.info(f"Sending {len(commands)} command(s): {cmd_names}")
             resp = self.session.post(
                 f"{self.BASE_URL}/cmd",
@@ -60,6 +61,18 @@ class TXThread(threading.Thread):
         else:
             logger.error(f"Unknown endpoint: {endpoint}")
             return
+        
+        if resp.status_code == 400:
+            try:
+                err = resp.json().get("error", "")
+            except Exception:
+                err = ""
+            if err == "empty body":
+                logger.debug("ESP32 returned 'empty body' — ignoring, command will still execute")
+                return
 
+        if not resp.ok:
+            logger.error(f"Command rejected ({resp.status_code}): {resp.text}")
+            logger.error(f"Request headers: {resp.request.headers}")
         resp.raise_for_status()
         logger.debug(f"Command response: {resp.status_code} {resp.text}")

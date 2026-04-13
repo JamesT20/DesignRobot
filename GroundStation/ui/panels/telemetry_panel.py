@@ -4,10 +4,6 @@ from ui.theme import Theme
 Theme = Theme()
 
 SECTIONS = [
-    ("Battery", [
-        (TLM.PWR_MOT1_VOLT, "Voltage",  "V"),
-        (TLM.PWR_MOT1_CUR,  "Current",  "mA"),
-    ]),
     ("IMU", [
         (TLM.IMU_HEADING, "Heading", "°"),
         (TLM.IMU_ROLL,    "Roll",    "°"),
@@ -63,7 +59,7 @@ SECTIONS = [
 
 # How many sections go in the left column before wrapping to the right.
 # With 8 sections total, 4/4 gives a balanced split. Adjust as needed.
-LEFT_COLUMN_SECTIONS = 4
+LEFT_COLUMN_SECTIONS = 3
 
 
 class TelemetryPanel(tk.Frame):

@@ -66,7 +66,7 @@ const char* password = "12345678";
 AsyncWebServer server(80);
 
 // ── INA219 Current Sensors ───────────────────────────────────────────────────
-Adafruit_INA219 ina219_mot1(0x44);   // A1 soldered — battery monitor
+Adafruit_INA219 ina219_mot1(0x44);   // A1 soldered — motor monitor
 Adafruit_INA219 ina219_mot2(0x45);   // A1+A0 soldered — motor monitor
 
 struct PowerData {
@@ -142,8 +142,7 @@ unsigned long lastLoopUs   = 0;   // full cycle duration in ms (previous iterati
 unsigned long lastImuTime  = 0;
 uint32_t      pktSeq       = 0;
 
-// ── [LOG] Log Level Enum ──────────────────────────────────────────────────────
-// Maps directly to the levels defined in the GUI protocol spec.
+// ── Log Level Enum ──────────────────────────────────────────────────────
 enum LogLevel {
   LOG_DEBUG = 0,
   LOG_INFO,
@@ -151,9 +150,7 @@ enum LogLevel {
   LOG_ERROR,
 };
 
-// ── [LOG] Log Entry ───────────────────────────────────────────────────────────
-// One entry held in the ring buffer.  contextJson is an optional pre-serialised
-// JSON object string (e.g. "{\"motor_id\":1}"), or "" if unused.
+// ── Log Entry ───────────────────────────────────────────────────────────
 struct LogEntry {
   uint32_t  timestamp;          // millis() at time of log
   LogLevel  level;
@@ -162,9 +159,7 @@ struct LogEntry {
   char      contextJson[64];    // optional extra key/value pairs as JSON object, or ""
 };
 
-// ── [LOG] Log Ring Buffer ─────────────────────────────────────────────────────
-// Newest-in overwrites oldest when full.  The GUI polls GET /log and drains
-// all pending entries in one JSON array response.
+// ── Log Ring Buffer ─────────────────────────────────────────────────────
 static constexpr uint8_t LOG_BUF_SIZE = 64;
 LogEntry logBuf[LOG_BUF_SIZE];
 volatile uint8_t logHead = 0;   // next slot to write
@@ -186,7 +181,6 @@ bool queueEmpty();
 void processCommandQueue();
 CmdType parseCmdType(const char* str);
 
-// [LOG] Forward declarations
 void sendLog(LogLevel level, const char* source, const char* message, const char* contextJson = "");
 String buildLogJson();
 
@@ -229,19 +223,7 @@ void sendLog(LogLevel level,
   Serial.printf("[%s][%s] %s\n", lvlStr[level], source, message);
 }
 
-// ── [LOG] buildLogJson ────────────────────────────────────────────────────────
-// Drain all pending log entries from the ring buffer into a single JSON array
-// payload conforming to the GUI protocol spec:
-//
-//   [
-//     { "type":"log", "timestamp":156234, "level":"INFO",
-//       "source":"motors", "message":"Motor A set forward",
-//       "context":{"motor_id":1,"dir":1} },
-//     ...
-//   ]
-//
-// The buffer is fully drained on each call — the GUI receives every entry that
-// accumulated since the last poll, in chronological order.
+// Build a JSON array string of all pending log entries in the buffer and advance
 String buildLogJson() {
   const char* lvlStr[] = { "DEBUG", "INFO", "WARN", "ERROR" };
 
@@ -279,7 +261,7 @@ String buildLogJson() {
 void setup() {
   Serial.begin(115200);
 
-  // [LOG] First log entry — firmware boot
+// Log Boot started
   sendLog(LOG_INFO, "system", "Firmware boot started",
           "{\"version\":\"1.0\",\"build\":\"" __DATE__ " " __TIME__ "\"}");
 
@@ -290,7 +272,7 @@ void setup() {
   pinMode(MOT_B_IN4, OUTPUT);
 
   stopAllMotors();
-  // [LOG] Motor GPIO ready
+  // Motor GPIO ready
   sendLog(LOG_INFO, "motors", "Motor GPIO initialised and stopped",
           "{\"pins_a\":[1,2],\"pins_b\":[3,14]}");
 
@@ -304,29 +286,29 @@ void setup() {
   mpu.setYGyroOffset(0);
   mpu.setZGyroOffset(0);
   lastImuTime = millis();
-  // [LOG] IMU ready
+  // IMU ready
   sendLog(LOG_INFO, "imu", "MPU6050 initialised with zero offsets",
           "{\"sda\":20,\"scl\":19,\"tilt_threshold_deg\":45}");
 
   // ── INA219 init ───────────────────────────────────────────────────────────
   if (!ina219_mot1.begin()) {
     Serial.println("INA219 (0x44) not found");
-    // [LOG] Power sensor fault
+    // Power sensor fault
     sendLog(LOG_ERROR, "power", "INA219 @ 0x44 not found — battery monitor offline",
             "{\"addr\":\"0x44\"}");
   } else {
-    // [LOG] Power sensor OK
+    // Power sensor OK
     sendLog(LOG_INFO, "power", "INA219 @ 0x44 (battery monitor) online",
             "{\"addr\":\"0x44\"}");
   }
 
   if (!ina219_mot2.begin()) {
     Serial.println("INA219 (0x45) not found");
-    // [LOG] Power sensor fault
+    // Power sensor fault
     sendLog(LOG_ERROR, "power", "INA219 @ 0x45 not found — motor monitor offline",
             "{\"addr\":\"0x45\"}");
   } else {
-    // [LOG] Power sensor OK
+    // Power sensor OK
     sendLog(LOG_INFO, "power", "INA219 @ 0x45 (motor monitor) online",
             "{\"addr\":\"0x45\"}");
   }
@@ -335,7 +317,7 @@ void setup() {
   WiFi.softAP(ssid, password);
   Serial.print("AP Started — IP: ");
   Serial.println(WiFi.softAPIP());
-  // [LOG] WiFi AP up
+  // WiFi AP up
   {
     char ctx[64];
     snprintf(ctx, sizeof(ctx), "{\"ssid\":\"%s\",\"ip\":\"%s\"}", ssid,
@@ -420,9 +402,9 @@ void setup() {
               if (obj.containsKey("ms")) {
                 c.argA = (int32_t)obj["ms"];
               } else {
-                c.argA = (int32_t)(((float)obj["seconds"] | 0.0f) * 1000.0f);
+                c.argA = (int32_t)(obj["seconds"].as<float>() * 1000.0f);
               }
-              c.argA = max(c.argA, 0);
+              c.argA = max(c.argA, (int32_t)0);
               break;
             default:
               break;
@@ -632,9 +614,9 @@ bool enqueueCmd(const Command& cmd) {
   if (next == cmdTail) {
     faults.queueOverflow = true;
     Serial.println("[CMD] Queue overflow — command dropped");
-    // [LOG] Queue overflow fault
-    sendLog(LOG_ERROR, "commands", "Command queue overflow — command dropped",
-            "{\"cmd_type\":" + String((int)cmd.type) + "}");
+    char ctx[48];
+    snprintf(ctx, sizeof(ctx), "{\"cmd_type\":%d}", (int)cmd.type);
+    sendLog(LOG_ERROR, "commands", "Command queue overflow — command dropped", ctx);
     return false;
   }
   cmdQueue[cmdHead] = cmd;
@@ -771,18 +753,9 @@ void updatePower() {
   pwr.mot2Volt = ina219_mot2.getBusVoltage_V();
   pwr.mot2Cur  = ina219_mot2.getCurrent_mA();
 
-  // [LOG] Warn when battery voltage drops below 6 V (two Li-ion cells nearly depleted)
-  static float prevMot1Volt = 99.0f;
-  if (pwr.mot1Volt < 6.0f && prevMot1Volt >= 6.0f) {
-    char ctx[64];
-    snprintf(ctx, sizeof(ctx), "{\"volt\":%.2f,\"threshold\":6.0}", pwr.mot1Volt);
-    sendLog(LOG_WARN, "power", "Battery voltage below 6 V — charge soon", ctx);
-  }
-  prevMot1Volt = pwr.mot1Volt;
-
   // [LOG] Warn on very high motor current (possible stall / short)
   static float prevMot2Cur = 0.0f;
-  constexpr float MOTOR_OVERCURRENT_MA = 2000.0f;
+  constexpr float MOTOR_OVERCURRENT_MA = 200.0f;
   if (pwr.mot2Cur > MOTOR_OVERCURRENT_MA && prevMot2Cur <= MOTOR_OVERCURRENT_MA) {
     char ctx[64];
     snprintf(ctx, sizeof(ctx), "{\"current_ma\":%.1f,\"threshold\":2000}", pwr.mot2Cur);
