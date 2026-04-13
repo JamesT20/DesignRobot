@@ -7,6 +7,7 @@ FAULTS = [
     (TLM.FLT_IMU_TILT,    "TILT"),
     (TLM.FLT_MOT_STALL_1, "L MTR\nSTALL"),
     (TLM.FLT_MOT_STALL_2, "R MTR\nSTALL"),
+    (TLM.FLT_QUEUE_OVERFLOW, "QUEUE\nOVF"),
 ]
 
 class FaultPanel(tk.Frame):

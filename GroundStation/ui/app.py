@@ -11,17 +11,20 @@ from ui.theme import Theme
 Theme = Theme()
 
 import queue
+from core.logger import get_logger
 
+logger = get_logger("ui.app")
 POLL_INTERVAL_MS = 50
 
 class App:
-    def __init__(self, root, telemetry, conn, rx_queue, tx_queue, frame_queue):
+    def __init__(self, root, telemetry, conn, rx_queue, tx_queue, frame_queue, log_queue):
         self.root        = root
         self.telemetry   = telemetry
         self.conn        = conn
         self.rx_queue    = rx_queue
         self.tx_queue    = tx_queue
         self.frame_queue = frame_queue
+        self.log_queue   = log_queue
         
  
         root.tk_setPalette(background=Theme.BG, foreground=Theme.TEXT, 
@@ -33,6 +36,7 @@ class App:
 
         self._build_layout()
         self._poll()
+        logger.info("GUI initialized successfully")
 
     def _build_layout(self):
 
@@ -51,7 +55,7 @@ class App:
         self.clock_panel = ClockPanel(self.middle_frame)
         self.view_panel  = OrientationPanel(self.middle_frame, self.telemetry)
         self.fault_panel = FaultPanel(self.middle_frame, self.telemetry)
-        self.log_panel   = LogPanel(self.middle_frame)
+        self.log_panel   = LogPanel(self.middle_frame, self.log_queue)
 
         self.tlm_panel   = TelemetryPanel(self.right_frame, self.telemetry)
 
@@ -78,19 +82,34 @@ class App:
         self.root.after(POLL_INTERVAL_MS, self._poll)
 
     def _handle_message(self, msg: dict):
-        mtype = msg.get("type")
-        if mtype == "tlm":
-            self.telemetry.update(msg)
-            self.tlm_panel.refresh()
-            self.fault_panel.refresh()
-            self.view_panel.refresh()
-        elif mtype == "fault":
-            self.fault_panel.add_fault(msg)
-        elif mtype == "ack":
-            self.log_panel.log(f"ACK {msg.get('cmd')} → {msg.get('status')}")
-        elif mtype == "pong":
-            pass  # update heartbeat state
+        try:
+            mtype = msg.get("type")
+            if mtype == "tlm":
+                self.telemetry.update(msg)
+                self.tlm_panel.refresh()
+                self.fault_panel.refresh()
+                self.view_panel.refresh()
+            elif mtype == "fault":
+                self.fault_panel.add_fault(msg)
+            elif mtype == "ack":
+                self.log_panel.log(f"ACK {msg.get('cmd')} → {msg.get('status')}")
+            elif mtype == "log":
+                # DUI sends logs with: timestamp, level, source, message, optional context
+                dui_level = msg.get("level", "INFO").upper()
+                dui_source = msg.get("source", "DUI")
+                dui_msg = msg.get("message", "")
+                log_text = f"[{dui_source}] {dui_msg}"
+                self.log_panel.log(log_text, dui_level)
+                logger.info(f"DUI Log [{dui_source}] {dui_msg}")
+            elif mtype == "pong":
+                pass  # update heartbeat state
+            else:
+                logger.warning(f"Unknown message type: {mtype}")
+        except Exception as e:
+            logger.error(f"Error handling message: {e}", exc_info=True)
 
     def on_close(self):
+        logger.info("Closing application")
+        self.log_panel.stop()
         self.conn.disconnect()
         self.root.destroy()
