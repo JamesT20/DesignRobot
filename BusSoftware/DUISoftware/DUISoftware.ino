@@ -51,6 +51,9 @@
 #define MOT_B_IN3  3    // Direction control A
 #define MOT_B_IN4  14   // Direction control B
 
+// ── IMU Tilt Fault Threshold (degrees) ───────────────────────────────────────
+#define IMU_TILT_THRESHOLD_DEG  45.0f
+
 // Camera Config
 #define MJPEG_BOUNDARY     "frame"
 #define MJPEG_CONTENT_TYPE "multipart/x-mixed-replace;boundary=" MJPEG_BOUNDARY
@@ -67,8 +70,8 @@ Adafruit_INA219 ina219_mot1(0x44);   // A1 soldered — battery monitor
 Adafruit_INA219 ina219_mot2(0x45);   // A1+A0 soldered — motor monitor
 
 struct PowerData {
-  float batVolt, batCur;
-  float motVolt, motCur;
+  float mot1Volt, mot1Cur;   // INA219 @ 0x44
+  float mot2Volt, mot2Cur;   // INA219 @ 0x45
 } pwr = {};
 
 // ── MPU6050 ──────────────────────────────────────────────────────────────────
@@ -90,10 +93,14 @@ struct MotorState {
 
 // ── Fault Flags ───────────────────────────────────────────────────────────────
 struct Faults {
-  bool imuTilt    = false;
-  bool motStall1  = false;
-  bool motStall2  = false;
+  bool imuTilt      = false;
+  bool motStall1    = false;
+  bool motStall2    = false;
+  bool queueOverflow = false;
 } faults;
+
+// ── Camera Status ─────────────────────────────────────────────────────────────
+bool camOk = false;
 
 // ── Command Queue ─────────────────────────────────────────────────────────────
 
@@ -129,7 +136,9 @@ volatile bool     seqRunning   = false;
 // Status string (last action, error, etc.)
 String lastStatus = "idle";
 
-unsigned long lastLoopTime = 0;
+unsigned long loopStart    = 0;   // captured at the very top of loop()
+unsigned long lastLoopUs   = 0;   // full cycle duration in ms (previous iteration)
+
 unsigned long lastImuTime  = 0;
 uint32_t      pktSeq       = 0;
 
@@ -275,8 +284,9 @@ void setup() {
     seqCurrent  = 0;
     cmdBusy     = false;
     stopAllMotors();
-    faults.motStall1 = false;
-    faults.motStall2 = false;
+    faults.motStall1    = false;
+    faults.motStall2    = false;
+    faults.queueOverflow = false;
     lastStatus = "ESTOP";
     request->send(200, "application/json", "{\"status\":\"stopped\"}");
   });
@@ -340,14 +350,20 @@ void setup() {
 
   if (esp_camera_init(&config) != ESP_OK) {
     Serial.println("Camera init failed");
+    camOk = false;
+  } else {
+    camOk = true;
+    applyOV3660Corrections();
   }
-  applyOV3660Corrections();
 }
 
 ///////////////////////////////////////////////////////// LOOP ///////////////////////////////////////////////////////////////////
 
 void loop() {
-  lastLoopTime = millis();
+  unsigned long now = millis();
+  lastLoopUs  = now - loopStart;   // duration of the previous iteration
+  loopStart   = now;
+
   updateIMU();
   updatePower();
   processCommandQueue();
@@ -402,7 +418,11 @@ void stopAllMotors() {
 
 bool enqueueCmd(const Command& cmd) {
   uint8_t next = (cmdHead + 1) % CMD_QUEUE_SIZE;
-  if (next == cmdTail) return false;
+  if (next == cmdTail) {
+    faults.queueOverflow = true;
+    Serial.println("[CMD] Queue overflow — command dropped");
+    return false;
+  }
   cmdQueue[cmdHead] = cmd;
   cmdHead = next;
   return true;
@@ -480,12 +500,17 @@ void processCommandQueue() {
       break;
 
     case CMD_SYS_CLEAR_FAULTS:
-      faults.imuTilt   = false;
-      faults.motStall1 = false;
-      faults.motStall2 = false;
+      faults.imuTilt      = false;
+      faults.motStall1    = false;
+      faults.motStall2    = false;
+      faults.queueOverflow = false;
       lastStatus = "FAULTS CLEARED";
       break;
 
+    default:
+      break;
+
+  }
 }
 
 ///////////////////////////////////////////////////////// HELPERS ////////////////////////////////////////////////////////////////
@@ -525,6 +550,9 @@ void updateIMU() {
   imu.heading += imu.gyroZ * dt;
   if (imu.heading <    0.0f) imu.heading += 360.0f;
   if (imu.heading >= 360.0f) imu.heading -= 360.0f;
+
+  faults.imuTilt = (fabsf(imu.roll)  > IMU_TILT_THRESHOLD_DEG ||
+                    fabsf(imu.pitch) > IMU_TILT_THRESHOLD_DEG);
 }
 
 String buildTelemetryJson() {
@@ -533,18 +561,22 @@ String buildTelemetryJson() {
   doc["type"] = "tlm";
 
   // System
-  doc["SYS_UPTIME"]     = millis() / 1000;
-  doc["SYS_HEAP_FREE"]  = ESP.getFreeHeap();
-  doc["SYS_LOOP_TIME"]  = millis() - lastLoopTime;
-  doc["SYS_PACKET_NUM"] = pktSeq++;
-  doc["SYS_MODE"]       = seqRunning ? "RUN" : "IDLE";
-  doc["SYS_STATUS"]     = lastStatus;
+  doc["SYS_UPTIME"]          = millis() / 1000;
+  doc["SYS_HEAP_FREE"]       = ESP.getFreeHeap();
+  doc["SYS_LOOP_TIME_MS"]    = lastLoopUs;              
+  doc["SYS_PACKET_NUM"]      = pktSeq++;
+  doc["SYS_MODE"]            = seqRunning ? "RUN" : "IDLE";
+  doc["SYS_STATUS"]          = lastStatus;
+  doc["SYS_WIFI_RSSI"]       = WiFi.softAPgetStationNum() > 0 ? (int)WiFi.RSSI() : 0; 
+  doc["SYS_TEMP_C"]          = serialized(String(temperatureRead(), 1));  
+  doc["SYS_CAM_OK"]          = camOk;                   
 
   // Sequence
-  doc["SEQ_RUNNING"]  = seqRunning;
-  doc["SEQ_CURRENT"]  = seqCurrent;
-  doc["SEQ_TOTAL"]    = seqTotal;
-  doc["SEQ_QUEUE"]    = (cmdHead - cmdTail + CMD_QUEUE_SIZE) % CMD_QUEUE_SIZE;
+  doc["SEQ_RUNNING"]         = seqRunning;
+  doc["SEQ_CURRENT"]         = seqCurrent;
+  doc["SEQ_TOTAL"]           = seqTotal;
+  doc["SEQ_QUEUE_DEPTH"]     = (cmdHead - cmdTail + CMD_QUEUE_SIZE) % CMD_QUEUE_SIZE;
+  doc["SEQ_QUEUE_REMAINING"] = CMD_QUEUE_SIZE - 1 - (cmdHead - cmdTail + CMD_QUEUE_SIZE) % CMD_QUEUE_SIZE;
 
   // Power
   doc["PWR_MOT1_VOLT"] = serialized(String(pwr.mot1Volt, 2));
@@ -568,11 +600,13 @@ String buildTelemetryJson() {
   doc["MOT_1_DIR"]     = motA.dir;
   doc["MOT_2_DIR_CMD"] = motB.dirCmd;
   doc["MOT_2_DIR"]     = motB.dir;
+  doc["MOT_BUSY"]      = cmdBusy;
 
   // Faults
-  doc["FLT_IMU_TILT"]    = faults.imuTilt;
-  doc["FLT_MOT_STALL_1"] = faults.motStall1;
-  doc["FLT_MOT_STALL_2"] = faults.motStall2;
+  doc["FLT_IMU_TILT"]      = faults.imuTilt;
+  doc["FLT_MOT_STALL_1"]   = faults.motStall1;
+  doc["FLT_MOT_STALL_2"]   = faults.motStall2;
+  doc["FLT_QUEUE_OVERFLOW"] = faults.queueOverflow;
 
   String out;
   serializeJson(doc, out);

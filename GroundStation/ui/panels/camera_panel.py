@@ -1,5 +1,6 @@
 import tkinter as tk
-from PIL import ImageTk
+from PIL import ImageTk, Image
+import io
 import queue
 from ui.theme import Theme
 Theme = Theme()
@@ -10,21 +11,19 @@ class CameraPanel(tk.Frame):
         self.frame_queue = frame_queue
         self._image_ref  = None  # must hold reference or GC collects it
 
-        self._canvas = tk.Canvas(self,bg="black")
-        self._canvas.pack(padx=5, pady=5)
-
-        self._fps_var = tk.StringVar(value="FPS: --")
-        tk.Label(self, textvariable=self._fps_var).pack()
+        self.video_label = tk.Label(self,bg="black")
+        self.video_label.pack(padx=5, pady=5)
 
         self._update()
 
     def _update(self):
         try:
-            img  = self.frame_queue.get_nowait()
+            jpg  = self.frame_queue.get_nowait()
+            img  = Image.open(io.BytesIO(jpg))
             img  = img.resize((320, 240))
             photo = ImageTk.PhotoImage(img)
-            self._canvas.create_image(0, 0, anchor="nw", image=photo)
-            self._image_ref = photo  # prevent garbage collection
+            self.video_label.configure(image=photo)
+            self.video_label.image = photo
         except queue.Empty:
             pass
         self.after(33, self._update)  # ~30fps attempt

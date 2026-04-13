@@ -41,14 +41,12 @@ class ConnectionManager:
         retry_interval = 3
         while not self._stop.is_set():
             try:
-                self._client = WSClient(host)
-                self._client.connect()
 
-                self._rx = RXThread(self._client._session, self.rx_queue, self._stop)
+                self._rx = RXThread(self.rx_queue, self._stop)
                 print('rx online')
-                self._tx = TXThread(self._client._session, self.tx_queue, self._stop)
+                self._tx = TXThread(self.tx_queue, self._stop)
                 print('tx online')
-                self._cam = CameraThread(self._client._session, self.frame_queue, self._stop)
+                self._cam = CameraThread(self.frame_queue, self._stop)
                 print('cam online')
 
                 self._rx.start()

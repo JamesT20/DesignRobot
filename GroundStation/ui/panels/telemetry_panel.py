@@ -8,7 +8,7 @@ SECTIONS = [
     ("IMU",      [(TLM.IMU_HEADING, "Heading", "°"), (TLM.IMU_ROLL, "Roll", "°"), (TLM.IMU_PITCH, "Pitch", "°")]),
     ("Payload",  [(TLM.TMP_PROBE, "Temp", "°C")]),
     ("System",   [(TLM.SYS_MODE, "Status", ""), (TLM.SYS_UPTIME, "Uptime", "s"),
-                  (TLM.SYS_HEAP_FREE, "Heap", "mb"), (TLM.SYS_PACKET_NUM, "Packet", ""), (TLM.SYS_CPU_TEMP, "CPU Temp", "°C")]),
+                  (TLM.SYS_HEAP_FREE, "Heap", "mb"), (TLM.SYS_PACKET_NUM, "Packet", ""), (TLM.SYS_LOOP_TIME, "Loop Time", "s")]),
     ("L Motor",  [(TLM.MOT_1_SPEED, "Speed", "%"), (TLM.MOT_1_DIR, "Direction", ""),
                   (TLM.PWR_MOT1_VOLT, "Voltage", "V"), (TLM.PWR_MOT1_CUR, "Current", "A")]),
     ("R Motor",  [(TLM.MOT_2_SPEED, "Speed", "%"), (TLM.MOT_2_DIR, "Direction", ""),
