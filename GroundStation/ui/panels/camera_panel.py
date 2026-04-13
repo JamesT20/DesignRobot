@@ -11,7 +11,7 @@ class CameraPanel(tk.Frame):
         self.frame_queue = frame_queue
         self._image_ref  = None  # must hold reference or GC collects it
 
-        self.video_label = tk.Label(self,bg="black")
+        self.video_label = tk.Label(self, bg=Theme.BG)
         self.video_label.pack(padx=5, pady=5)
 
         self._update()

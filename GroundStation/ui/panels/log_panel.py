@@ -7,13 +7,13 @@ Theme = Theme()
 
 # Map logging levels to colors (matching both old and new level names)
 LEVEL_COLORS = {
-    "INFO": "white",
-    "DEBUG": "white",
-    "WARN": "#f0a500",
-    "WARNING": "#f0a500",
-    "ERROR": "#cc0000",
-    "FAULT": "#ff6600",
-    "CRITICAL": "#cc0000"
+    "INFO": Theme.TEXT,
+    "DEBUG": Theme.TEXT,
+    "WARN": Theme.WARN_COLOR,
+    "WARNING": Theme.WARN_COLOR,
+    "ERROR": Theme.ERROR_COLOR,
+    "FAULT": Theme.WARN_COLOR,
+    "CRITICAL": Theme.ERROR_COLOR
 }
 
 class LogPanel(tk.Frame):

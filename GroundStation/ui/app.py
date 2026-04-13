@@ -27,9 +27,20 @@ class App:
         self.log_queue   = log_queue
         
  
-        root.tk_setPalette(background=Theme.BG, foreground=Theme.TEXT, 
-                   activeBackground=Theme.RED, selectBackground=Theme.RED)
+        # Apply comprehensive palette for all widgets
+        root.tk_setPalette(
+            background=Theme.BG,
+            foreground=Theme.TEXT,
+            activeBackground=Theme.PANEL_BG,
+            activeforeground=Theme.ACCENT,
+            selectBackground=Theme.ERROR_COLOR,
+            selectForeground="white"
+        )
         root.option_add("*Font", (Theme.FONT_MONO, Theme.FONT_SIZE_M))
+        root.option_add("*Button*highlightBackground", Theme.BG)
+        root.option_add("*Button*highlightThickness", 0)
+        root.option_add("*Scrollbar*background", Theme.PANEL_BG)
+        root.option_add("*Scrollbar*troughBackground", Theme.BG)
         root.title("DUI GUI")
         root.geometry("1280x800")
         root.minsize(1024, 600)
@@ -59,16 +70,16 @@ class App:
 
         self.tlm_panel   = TelemetryPanel(self.right_frame, self.telemetry)
 
-        self.conn_panel.pack(fill="x", padx=5, pady=5)
-        self.cam_panel.pack(fill="x", padx=5, pady=5)
-        self.cmd_panel.pack(fill="x", padx=5, pady=5)
+        self.conn_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.cam_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.cmd_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
        
-        self.clock_panel.pack(fill="x", padx=5, pady=5)
-        self.view_panel.pack(fill="x", padx=5, pady=5)
-        self.fault_panel.pack(fill="x", padx=5, pady=5)
-        self.log_panel.pack(fill="x", padx=5, pady=5)
+        self.clock_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.view_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.fault_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
+        self.log_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
 
-        self.tlm_panel.pack(fill="x", padx=5, pady=5)
+        self.tlm_panel.pack(fill="x", padx=Theme.PADDING_M, pady=Theme.PADDING_M)
 
     def _poll(self):
         # Drain telemetry queue

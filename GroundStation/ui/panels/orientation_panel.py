@@ -12,9 +12,9 @@ from core.constants import TLM
 from ui.theme import Theme
 Theme = Theme()
 
-ACCENT = "#00ff66"
-CYAN   = "#00ddff"
-DIM    = "#0d2a12"
+ACCENT = Theme.PLOT_ACCENT
+CYAN   = Theme.PLOT_CYAN
+DIM    = Theme.PLOT_DIM
 
 
 # ── geometry ──────────────────────────────────────────────────────────────────

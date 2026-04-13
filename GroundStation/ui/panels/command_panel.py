@@ -95,7 +95,7 @@ class CommandPanel(tk.Frame):
 
         estop_btn = tk.Button(
             self, text="E-STOP",
-            bg="red", fg="white", font=("Arial", 14, "bold"),
+            bg=Theme.ERROR_COLOR, fg="white", font=(Theme.FONT_MONO, Theme.FONT_SIZE_L, "bold"),
             command=self._estop,
         )
         estop_btn.grid(row=6, column=0, columnspan=2, sticky="ew", padx=8, pady=6)

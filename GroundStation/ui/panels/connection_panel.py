@@ -5,11 +5,11 @@ from ui.theme import Theme
 Theme = Theme()
 
 STATE_COLORS = {
-    ConnState.DISCONNECTED: "#888888",
-    ConnState.CONNECTING:   "#f0a500",
-    ConnState.CONNECTED:    "#00cc44",
-    ConnState.RECONNECTING: "#f0a500",
-    ConnState.ERROR:        "#cc0000",
+    ConnState.DISCONNECTED: Theme.INACTIVE_COLOR,
+    ConnState.CONNECTING:   Theme.WARN_COLOR,
+    ConnState.CONNECTED:    Theme.SUCCESS_COLOR,
+    ConnState.RECONNECTING: Theme.WARN_COLOR,
+    ConnState.ERROR:        Theme.ERROR_COLOR,
 }
 
 class ConnectionPanel(tk.Frame):
@@ -32,7 +32,7 @@ class ConnectionPanel(tk.Frame):
         self._btn.pack(side=tk.LEFT, padx=(0, 10))
 
         # Connection status
-        self._conn_dot = tk.Label(ctrl_frame, text="●", fg="#888888", font=(Theme.FONT_MONO, Theme.FONT_SIZE_M))
+        self._conn_dot = tk.Label(ctrl_frame, text="●", fg=Theme.INACTIVE_COLOR, font=(Theme.FONT_MONO, Theme.FONT_SIZE_M))
         self._conn_dot.pack(side=tk.LEFT, padx=(0, 3))
         self._conn_lbl = tk.Label(ctrl_frame, text="Disconnected",font=(Theme.FONT_MONO, Theme.FONT_SIZE_M))
         self._conn_lbl.pack(side=tk.LEFT, padx=(0, 16))
@@ -48,7 +48,7 @@ class ConnectionPanel(tk.Frame):
         """Create a small labelled info cell and return the value Label."""
         cell = tk.Frame(parent, padx=8)
         cell.grid(row=0, column=col, sticky="w")
-        tk.Label(cell, text=label, font=(Theme.FONT_MONO, Theme.FONT_SIZE_M), fg="#888888").pack(anchor="w")
+        tk.Label(cell, text=label, font=(Theme.FONT_MONO, Theme.FONT_SIZE_M), fg=Theme.TEXT_MUTED).pack(anchor="w")
         val = tk.Label(cell, text=default, font=(Theme.FONT_MONO, Theme.FONT_SIZE_M,"bold"))
         val.pack(anchor="w")
         return val
@@ -82,7 +82,7 @@ class ConnectionPanel(tk.Frame):
             self.conn.connect(host)
 
     def _on_state_change(self, state: ConnState):
-        color = STATE_COLORS.get(state, "#888888")
+        color = STATE_COLORS.get(state, Theme.INACTIVE_COLOR)
         self._conn_dot.config(fg=color)
         self._conn_lbl.config(text=state.value)
         self._btn.config(text="Disconnect" if state == ConnState.CONNECTED else "Connect")

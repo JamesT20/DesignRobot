@@ -31,9 +31,9 @@ class FaultPanel(tk.Frame):
 
 
 class FaultButton(tk.Label):
-    ACTIVE  = {"bg": "#cc2200", "fg": "white"}
-    WARNING = {"bg": "#cc8800", "fg": "white"}
-    NOMINAL = {"bg": "#444444", "fg": "#aaaaaa"}
+    ACTIVE  = {"bg": Theme.ERROR_COLOR, "fg": "white"}
+    WARNING = {"bg": Theme.WARN_COLOR, "fg": "white"}
+    NOMINAL = {"bg": Theme.INACTIVE_COLOR, "fg": Theme.TEXT_MUTED}
 
     def __init__(self, parent, label, **kwargs):
         super().__init__(parent, text=label,
