@@ -142,6 +142,34 @@ unsigned long lastLoopUs   = 0;   // full cycle duration in ms (previous iterati
 unsigned long lastImuTime  = 0;
 uint32_t      pktSeq       = 0;
 
+// ── [LOG] Log Level Enum ──────────────────────────────────────────────────────
+// Maps directly to the levels defined in the GUI protocol spec.
+enum LogLevel {
+  LOG_DEBUG = 0,
+  LOG_INFO,
+  LOG_WARN,
+  LOG_ERROR,
+};
+
+// ── [LOG] Log Entry ───────────────────────────────────────────────────────────
+// One entry held in the ring buffer.  contextJson is an optional pre-serialised
+// JSON object string (e.g. "{\"motor_id\":1}"), or "" if unused.
+struct LogEntry {
+  uint32_t  timestamp;          // millis() at time of log
+  LogLevel  level;
+  char      source[16];         // subsystem name, null-terminated
+  char      message[96];        // human-readable message, null-terminated
+  char      contextJson[64];    // optional extra key/value pairs as JSON object, or ""
+};
+
+// ── [LOG] Log Ring Buffer ─────────────────────────────────────────────────────
+// Newest-in overwrites oldest when full.  The GUI polls GET /log and drains
+// all pending entries in one JSON array response.
+static constexpr uint8_t LOG_BUF_SIZE = 64;
+LogEntry logBuf[LOG_BUF_SIZE];
+volatile uint8_t logHead = 0;   // next slot to write
+volatile uint8_t logTail = 0;   // next slot to read (GUI drain cursor)
+
 ///////////////////////////////////////////////////////// END INIT ///////////////////////////////////////////////////////////////
 
 // Forward declarations
@@ -158,10 +186,102 @@ bool queueEmpty();
 void processCommandQueue();
 CmdType parseCmdType(const char* str);
 
+// [LOG] Forward declarations
+void sendLog(LogLevel level, const char* source, const char* message, const char* contextJson = "");
+String buildLogJson();
+
+///////////////////////////////////////////////////////// LOGGING ////////////////////////////////////////////////////////////////
+
+// ── [LOG] sendLog ─────────────────────────────────────────────────────────────
+// Write one structured log entry into the ring buffer.  If the buffer is full
+// the oldest unread entry is silently overwritten (newest-wins policy keeps the
+// most recent diagnostics alive even under heavy logging).
+//
+// Parameters:
+//   level       — LOG_DEBUG / LOG_INFO / LOG_WARN / LOG_ERROR
+//   source      — subsystem name shown in the GUI LogPanel prefix
+//   message     — human-readable description of the event
+//   contextJson — optional JSON object string with extra metadata, e.g.
+//                 "{\"motor_id\":1,\"dir\":1}"  Leave "" if not needed.
+void sendLog(LogLevel level,
+             const char* source,
+             const char* message,
+             const char* contextJson) {
+
+  uint8_t slot = logHead;
+  logHead = (logHead + 1) % LOG_BUF_SIZE;
+
+  // If we've lapped the tail the oldest entry is silently dropped.
+  // (The GUI will see a gap but never a crash.)
+  if (logHead == logTail) {
+    logTail = (logTail + 1) % LOG_BUF_SIZE;
+  }
+
+  LogEntry& e = logBuf[slot];
+  e.timestamp = millis();
+  e.level     = level;
+  strncpy(e.source,      source,      sizeof(e.source)      - 1);  e.source[sizeof(e.source)-1]      = '\0';
+  strncpy(e.message,     message,     sizeof(e.message)     - 1);  e.message[sizeof(e.message)-1]     = '\0';
+  strncpy(e.contextJson, contextJson, sizeof(e.contextJson) - 1);  e.contextJson[sizeof(e.contextJson)-1] = '\0';
+
+  // Also mirror to Serial for development convenience
+  const char* lvlStr[] = { "DEBUG", "INFO", "WARN", "ERROR" };
+  Serial.printf("[%s][%s] %s\n", lvlStr[level], source, message);
+}
+
+// ── [LOG] buildLogJson ────────────────────────────────────────────────────────
+// Drain all pending log entries from the ring buffer into a single JSON array
+// payload conforming to the GUI protocol spec:
+//
+//   [
+//     { "type":"log", "timestamp":156234, "level":"INFO",
+//       "source":"motors", "message":"Motor A set forward",
+//       "context":{"motor_id":1,"dir":1} },
+//     ...
+//   ]
+//
+// The buffer is fully drained on each call — the GUI receives every entry that
+// accumulated since the last poll, in chronological order.
+String buildLogJson() {
+  const char* lvlStr[] = { "DEBUG", "INFO", "WARN", "ERROR" };
+
+  String out = "[";
+  bool first = true;
+
+  while (logTail != logHead) {
+    LogEntry& e = logBuf[logTail];
+    logTail = (logTail + 1) % LOG_BUF_SIZE;
+
+    if (!first) out += ",";
+    first = false;
+
+    // Build the entry manually to avoid a second StaticJsonDocument on the heap
+    out += "{\"type\":\"log\"";
+    out += ",\"timestamp\":";  out += e.timestamp;
+    out += ",\"level\":\"";    out += lvlStr[e.level]; out += "\"";
+    out += ",\"source\":\"";   out += e.source;        out += "\"";
+    out += ",\"message\":\"";  out += e.message;       out += "\"";
+
+    if (e.contextJson[0] != '\0') {
+      out += ",\"context\":";
+      out += e.contextJson;   // already a valid JSON object string
+    }
+
+    out += "}";
+  }
+
+  out += "]";
+  return out;
+}
+
 ///////////////////////////////////////////////////////// SETUP //////////////////////////////////////////////////////////////////
 
 void setup() {
   Serial.begin(115200);
+
+  // [LOG] First log entry — firmware boot
+  sendLog(LOG_INFO, "system", "Firmware boot started",
+          "{\"version\":\"1.0\",\"build\":\"" __DATE__ " " __TIME__ "\"}");
 
   // ── Motor GPIO init ──────────────────────────────────────────────────────
   pinMode(MOT_A_IN1, OUTPUT);
@@ -170,6 +290,9 @@ void setup() {
   pinMode(MOT_B_IN4, OUTPUT);
 
   stopAllMotors();
+  // [LOG] Motor GPIO ready
+  sendLog(LOG_INFO, "motors", "Motor GPIO initialised and stopped",
+          "{\"pins_a\":[1,2],\"pins_b\":[3,14]}");
 
   // ── MPU6050 init ─────────────────────────────────────────────────────────
   Wire.begin(IMU_SDA_PIN, IMU_SCL_PIN);
@@ -181,19 +304,56 @@ void setup() {
   mpu.setYGyroOffset(0);
   mpu.setZGyroOffset(0);
   lastImuTime = millis();
+  // [LOG] IMU ready
+  sendLog(LOG_INFO, "imu", "MPU6050 initialised with zero offsets",
+          "{\"sda\":20,\"scl\":19,\"tilt_threshold_deg\":45}");
 
   // ── INA219 init ───────────────────────────────────────────────────────────
-  if (!ina219_mot1.begin()) Serial.println("INA219 (0x44) not found");
-  if (!ina219_mot2.begin()) Serial.println("INA219 (0x45) not found");
+  if (!ina219_mot1.begin()) {
+    Serial.println("INA219 (0x44) not found");
+    // [LOG] Power sensor fault
+    sendLog(LOG_ERROR, "power", "INA219 @ 0x44 not found — battery monitor offline",
+            "{\"addr\":\"0x44\"}");
+  } else {
+    // [LOG] Power sensor OK
+    sendLog(LOG_INFO, "power", "INA219 @ 0x44 (battery monitor) online",
+            "{\"addr\":\"0x44\"}");
+  }
+
+  if (!ina219_mot2.begin()) {
+    Serial.println("INA219 (0x45) not found");
+    // [LOG] Power sensor fault
+    sendLog(LOG_ERROR, "power", "INA219 @ 0x45 not found — motor monitor offline",
+            "{\"addr\":\"0x45\"}");
+  } else {
+    // [LOG] Power sensor OK
+    sendLog(LOG_INFO, "power", "INA219 @ 0x45 (motor monitor) online",
+            "{\"addr\":\"0x45\"}");
+  }
 
   // ── WiFi Access Point ─────────────────────────────────────────────────────
   WiFi.softAP(ssid, password);
   Serial.print("AP Started — IP: ");
   Serial.println(WiFi.softAPIP());
+  // [LOG] WiFi AP up
+  {
+    char ctx[64];
+    snprintf(ctx, sizeof(ctx), "{\"ssid\":\"%s\",\"ip\":\"%s\"}", ssid,
+             WiFi.softAPIP().toString().c_str());
+    sendLog(LOG_INFO, "wifi", "Access point started", ctx);
+  }
 
   // ── /tlm — Telemetry ──────────────────────────────────────────────────────
   server.on("/tlm", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send(200, "application/json", buildTelemetryJson());
+  });
+
+  // ── /log — Log drain endpoint ─────────────────────────────────────────────
+  // [LOG] Register the /log endpoint that the GUI polls to drain log entries.
+  // Returns a JSON array of all pending log entries and clears them from the
+  // ring buffer.  If there are no pending entries the response is "[]".
+  server.on("/log", HTTP_GET, [](AsyncWebServerRequest* request) {
+    request->send(200, "application/json", buildLogJson());
   });
 
   // ── /cmd — Receive command sequence (JSON array) ──────────────────────────
@@ -225,6 +385,9 @@ void setup() {
         request->_tempObject = nullptr;
 
         if (err || !doc.is<JsonArray>()) {
+          // [LOG] Bad command payload
+          sendLog(LOG_WARN, "commands", "Received invalid /cmd payload — JSON parse failed",
+                  "{\"error\":\"invalid JSON array\"}");
           request->send(400, "application/json",
                         "{\"error\":\"invalid JSON array\"}");
           return;
@@ -268,6 +431,13 @@ void setup() {
           if (enqueueCmd(c)) accepted++;
         }
 
+        // [LOG] Sequence loaded
+        {
+          char ctx[64];
+          snprintf(ctx, sizeof(ctx), "{\"accepted\":%u,\"total\":%u}", accepted, (uint32_t)seqTotal);
+          sendLog(LOG_INFO, "commands", "Command sequence loaded", ctx);
+        }
+
         lastStatus = "sequence loaded: " + String(accepted) + " cmd(s)";
 
         String resp = "{\"accepted\":" + String(accepted) +
@@ -288,6 +458,8 @@ void setup() {
     faults.motStall2    = false;
     faults.queueOverflow = false;
     lastStatus = "ESTOP";
+    // [LOG] Emergency stop
+    sendLog(LOG_WARN, "commands", "Emergency stop received — queue cleared, motors stopped", "");
     request->send(200, "application/json", "{\"status\":\"stopped\"}");
   });
 
@@ -300,6 +472,8 @@ void setup() {
 
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) {
+      // [LOG] Frame grab failure
+      sendLog(LOG_ERROR, "camera", "Frame grab failed on /stream request", "");
       request->send(503, "text/plain", "Camera frame unavailable");
       return;
     }
@@ -316,10 +490,18 @@ void setup() {
 
   // ── 404 fallback ──────────────────────────────────────────────────────────
   server.onNotFound([](AsyncWebServerRequest* request) {
+    // [LOG] Unknown route
+    char ctx[80];
+    snprintf(ctx, sizeof(ctx), "{\"url\":\"%s\",\"method\":%d}",
+             request->url().c_str(), (int)request->method());
+    sendLog(LOG_WARN, "server", "404 — unknown route", ctx);
     request->send(404, "text/plain", "Not found");
   });
 
   server.begin();
+  // [LOG] HTTP server up
+  sendLog(LOG_INFO, "server", "HTTP server started on port 80",
+          "{\"endpoints\":[\"/tlm\",\"/log\",\"/cmd\",\"/cmd/stop\",\"/stream\"]}");
 
   // ── Camera init ───────────────────────────────────────────────────────────
   camera_config_t config;
@@ -351,10 +533,19 @@ void setup() {
   if (esp_camera_init(&config) != ESP_OK) {
     Serial.println("Camera init failed");
     camOk = false;
+    // [LOG] Camera init failure
+    sendLog(LOG_ERROR, "camera", "esp_camera_init failed — camera offline",
+            "{\"pixel_format\":\"JPEG\",\"frame_size\":\"QVGA\"}");
   } else {
     camOk = true;
     applyOV3660Corrections();
+    // [LOG] Camera ready
+    sendLog(LOG_INFO, "camera", "Camera initialised OK — OV3660 corrections applied",
+            "{\"pixel_format\":\"JPEG\",\"frame_size\":\"QVGA\",\"quality\":12,\"fb_count\":2}");
   }
+
+  // [LOG] Boot complete
+  sendLog(LOG_INFO, "system", "Setup complete — entering main loop", "");
 }
 
 ///////////////////////////////////////////////////////// LOOP ///////////////////////////////////////////////////////////////////
@@ -375,6 +566,15 @@ void loop() {
 // Set Motor A direction. dirCmd: 1 = forward, -1 = reverse, 0 = stop/brake.
 void setMotorA(int dirCmd) {
   dirCmd = constrain(dirCmd, -1, 1);
+
+  // [LOG] Log only on direction change to avoid flooding the buffer
+  if (dirCmd != motA.dir) {
+    char ctx[48];
+    snprintf(ctx, sizeof(ctx), "{\"motor_id\":1,\"prev_dir\":%d,\"new_dir\":%d}",
+             (int)motA.dir, dirCmd);
+    sendLog(LOG_DEBUG, "motors", "Motor A direction changed", ctx);
+  }
+
   motA.dirCmd = dirCmd;
   motA.dir    = dirCmd;
 
@@ -394,6 +594,15 @@ void setMotorA(int dirCmd) {
 // Set Motor B direction. Same convention as setMotorA.
 void setMotorB(int dirCmd) {
   dirCmd = constrain(dirCmd, -1, 1);
+
+  // [LOG] Log only on direction change
+  if (dirCmd != motB.dir) {
+    char ctx[48];
+    snprintf(ctx, sizeof(ctx), "{\"motor_id\":2,\"prev_dir\":%d,\"new_dir\":%d}",
+             (int)motB.dir, dirCmd);
+    sendLog(LOG_DEBUG, "motors", "Motor B direction changed", ctx);
+  }
+
   motB.dirCmd = dirCmd;
   motB.dir    = dirCmd;
 
@@ -412,6 +621,8 @@ void setMotorB(int dirCmd) {
 void stopAllMotors() {
   setMotorA(0);
   setMotorB(0);
+  // [LOG] Both motors stopped (only useful at INFO when called outside normal dir-change flow)
+  sendLog(LOG_INFO, "motors", "All motors stopped (brake applied)", "");
 }
 
 ///////////////////////////////////////////////////////// COMMAND QUEUE //////////////////////////////////////////////////////////
@@ -421,6 +632,9 @@ bool enqueueCmd(const Command& cmd) {
   if (next == cmdTail) {
     faults.queueOverflow = true;
     Serial.println("[CMD] Queue overflow — command dropped");
+    // [LOG] Queue overflow fault
+    sendLog(LOG_ERROR, "commands", "Command queue overflow — command dropped",
+            "{\"cmd_type\":" + String((int)cmd.type) + "}");
     return false;
   }
   cmdQueue[cmdHead] = cmd;
@@ -457,6 +671,8 @@ void processCommandQueue() {
       seqRunning = false;
       lastStatus = "sequence complete";
       Serial.println("[CMD] Sequence complete");
+      // [LOG] Sequence finished
+      sendLog(LOG_INFO, "commands", "Command sequence complete", "");
     }
     return;
   }
@@ -471,11 +687,25 @@ void processCommandQueue() {
       setMotorA((int)c.argA);
       setMotorB((int)c.argB);
       lastStatus = "MOT_SET_DIR L=" + String(c.argA) + " R=" + String(c.argB);
+      // [LOG] Motor direction command executed
+      {
+        char ctx[64];
+        snprintf(ctx, sizeof(ctx),
+                 "{\"seq\":%u,\"left_dir\":%d,\"right_dir\":%d}",
+                 c.seqIndex, (int)c.argA, (int)c.argB);
+        sendLog(LOG_DEBUG, "commands", "CMD_MOT_SET_DIR executed", ctx);
+      }
       break;
 
     case CMD_MOT_STOP:
       stopAllMotors();
       lastStatus = "MOT_STOP";
+      // [LOG] Explicit stop command
+      {
+        char ctx[32];
+        snprintf(ctx, sizeof(ctx), "{\"seq\":%u}", c.seqIndex);
+        sendLog(LOG_INFO, "commands", "CMD_MOT_STOP executed", ctx);
+      }
       break;
 
     case CMD_SYS_WAIT: {
@@ -483,11 +713,23 @@ void processCommandQueue() {
       waitUntil = millis() + (unsigned long)c.argA;
       cmdBusy   = true;
       lastStatus = "WAIT " + String(c.argA) + "ms";
+      // [LOG] Wait started
+      {
+        char ctx[48];
+        snprintf(ctx, sizeof(ctx), "{\"seq\":%u,\"wait_ms\":%d}", c.seqIndex, (int)c.argA);
+        sendLog(LOG_DEBUG, "commands", "CMD_SYS_WAIT started", ctx);
+      }
 
       while (millis() < waitUntil) {
         delay(1);
       }
       cmdBusy = false;
+      // [LOG] Wait complete
+      {
+        char ctx[48];
+        snprintf(ctx, sizeof(ctx), "{\"seq\":%u,\"wait_ms\":%d}", c.seqIndex, (int)c.argA);
+        sendLog(LOG_DEBUG, "commands", "CMD_SYS_WAIT complete", ctx);
+      }
       break;
     }
 
@@ -495,6 +737,8 @@ void processCommandQueue() {
       stopAllMotors();
       lastStatus = "REBOOTING";
       Serial.println("[CMD] REBOOT");
+      // [LOG] Reboot commanded — this will be the last log entry before restart
+      sendLog(LOG_WARN, "system", "CMD_SYS_REBOOT — rebooting in 500 ms", "");
       delay(500);
       ESP.restart();
       break;
@@ -505,6 +749,12 @@ void processCommandQueue() {
       faults.motStall2    = false;
       faults.queueOverflow = false;
       lastStatus = "FAULTS CLEARED";
+      // [LOG] Faults cleared
+      {
+        char ctx[32];
+        snprintf(ctx, sizeof(ctx), "{\"seq\":%u}", c.seqIndex);
+        sendLog(LOG_INFO, "commands", "All fault flags cleared by CMD_SYS_CLEAR_FAULTS", ctx);
+      }
       break;
 
     default:
@@ -520,6 +770,25 @@ void updatePower() {
   pwr.mot1Cur  = ina219_mot1.getCurrent_mA();
   pwr.mot2Volt = ina219_mot2.getBusVoltage_V();
   pwr.mot2Cur  = ina219_mot2.getCurrent_mA();
+
+  // [LOG] Warn when battery voltage drops below 6 V (two Li-ion cells nearly depleted)
+  static float prevMot1Volt = 99.0f;
+  if (pwr.mot1Volt < 6.0f && prevMot1Volt >= 6.0f) {
+    char ctx[64];
+    snprintf(ctx, sizeof(ctx), "{\"volt\":%.2f,\"threshold\":6.0}", pwr.mot1Volt);
+    sendLog(LOG_WARN, "power", "Battery voltage below 6 V — charge soon", ctx);
+  }
+  prevMot1Volt = pwr.mot1Volt;
+
+  // [LOG] Warn on very high motor current (possible stall / short)
+  static float prevMot2Cur = 0.0f;
+  constexpr float MOTOR_OVERCURRENT_MA = 2000.0f;
+  if (pwr.mot2Cur > MOTOR_OVERCURRENT_MA && prevMot2Cur <= MOTOR_OVERCURRENT_MA) {
+    char ctx[64];
+    snprintf(ctx, sizeof(ctx), "{\"current_ma\":%.1f,\"threshold\":2000}", pwr.mot2Cur);
+    sendLog(LOG_WARN, "power", "Motor overcurrent detected", ctx);
+  }
+  prevMot2Cur = pwr.mot2Cur;
 }
 
 void updateIMU() {
@@ -551,8 +820,26 @@ void updateIMU() {
   if (imu.heading <    0.0f) imu.heading += 360.0f;
   if (imu.heading >= 360.0f) imu.heading -= 360.0f;
 
-  faults.imuTilt = (fabsf(imu.roll)  > IMU_TILT_THRESHOLD_DEG ||
-                    fabsf(imu.pitch) > IMU_TILT_THRESHOLD_DEG);
+  // ── Tilt fault detection with edge-triggered logging ──────────────────────
+  bool tiltNow = (fabsf(imu.roll)  > IMU_TILT_THRESHOLD_DEG ||
+                  fabsf(imu.pitch) > IMU_TILT_THRESHOLD_DEG);
+
+  if (tiltNow && !faults.imuTilt) {
+    // [LOG] Tilt fault rising edge
+    char ctx[80];
+    snprintf(ctx, sizeof(ctx),
+             "{\"roll\":%.1f,\"pitch\":%.1f,\"threshold\":%.0f}",
+             imu.roll, imu.pitch, IMU_TILT_THRESHOLD_DEG);
+    sendLog(LOG_ERROR, "imu", "Tilt fault triggered — vehicle may be overturned", ctx);
+  } else if (!tiltNow && faults.imuTilt) {
+    // [LOG] Tilt fault cleared
+    char ctx[80];
+    snprintf(ctx, sizeof(ctx),
+             "{\"roll\":%.1f,\"pitch\":%.1f}", imu.roll, imu.pitch);
+    sendLog(LOG_INFO, "imu", "Tilt fault cleared — orientation restored", ctx);
+  }
+
+  faults.imuTilt = tiltNow;
 }
 
 String buildTelemetryJson() {
@@ -608,6 +895,13 @@ String buildTelemetryJson() {
   doc["FLT_MOT_STALL_2"]   = faults.motStall2;
   doc["FLT_QUEUE_OVERFLOW"] = faults.queueOverflow;
 
+  // [LOG] Log a warning if heap is getting tight (under 20 kB free)
+  if (ESP.getFreeHeap() < 20000) {
+    char ctx[48];
+    snprintf(ctx, sizeof(ctx), "{\"free_heap\":%u}", ESP.getFreeHeap());
+    sendLog(LOG_WARN, "system", "Low heap memory", ctx);
+  }
+
   String out;
   serializeJson(doc, out);
   return out;
@@ -615,7 +909,13 @@ String buildTelemetryJson() {
 
 void applyOV3660Corrections() {
   sensor_t* s = esp_camera_sensor_get();
-  if (!s) return;
+  if (!s) {
+    // [LOG] Sensor handle unavailable after init
+    sendLog(LOG_WARN, "camera", "applyOV3660Corrections: sensor handle is null", "");
+    return;
+  }
   s->set_vflip(s, 1);
   s->set_hmirror(s, 0);
+  // [LOG] OV3660 corrections applied
+  sendLog(LOG_DEBUG, "camera", "OV3660 vflip=1 hmirror=0 applied", "");
 }
