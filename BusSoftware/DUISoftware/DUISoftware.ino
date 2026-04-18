@@ -44,12 +44,12 @@
 // ── L298N Motor Driver Pins ─────────────────────────────────────────────────
 
 // Motor A (Left)
-#define MOT_A_IN1  1    // Direction control A
-#define MOT_A_IN2  2    // Direction control B
+#define MOT_A_IN1  41    // Direction control A
+#define MOT_A_IN2  40    // Direction control B
 
 // Motor B (Right)
-#define MOT_B_IN3  3    // Direction control A
-#define MOT_B_IN4  14   // Direction control B
+#define MOT_B_IN3  39    // Direction control A
+#define MOT_B_IN4  38   // Direction control B
 
 // ── IMU Tilt Fault Threshold (degrees) ───────────────────────────────────────
 #define IMU_TILT_THRESHOLD_DEG  45.0f
@@ -789,12 +789,12 @@ void updateIMU() {
   constexpr float ACCEL_SCALE = 9.80665f / 16384.0f;
   constexpr float GYRO_SCALE  = 1.0f    / 131.0f;
 
-  imu.accelX = ax * ACCEL_SCALE;
-  imu.accelY = ay * ACCEL_SCALE;
-  imu.accelZ = az * ACCEL_SCALE;
-  imu.gyroX  = gx * GYRO_SCALE;
-  imu.gyroY  = gy * GYRO_SCALE;
-  imu.gyroZ  = gz * GYRO_SCALE;
+  imu.accelX = ax * ACCEL_SCALE - 19.61f;  // Fixed X-axis offset correction (in m/s²);
+  imu.accelY = ay * ACCEL_SCALE - 16.2f;   // Fixed Y-axis offset correction (in m/s²);
+  imu.accelZ = az * ACCEL_SCALE + 19.61f; // Fixed Z-axis offset correction (in m/s²);
+  imu.gyroX  = gx * GYRO_SCALE + 2.70f;
+  imu.gyroY  = gy * GYRO_SCALE - 7.88f;
+  imu.gyroZ  = gz * GYRO_SCALE + 4.18f;
 
   unsigned long now = millis();
   float dt = (now - lastImuTime) / 1000.0f;

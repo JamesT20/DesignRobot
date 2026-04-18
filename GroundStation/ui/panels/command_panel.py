@@ -12,6 +12,11 @@ _DIR_MAP = {
     "left":    (-1,  1),
     "right":   ( 1, -1),
     "stop":    ( 0,  0),
+    # Single motor commands
+    "left_fwd":   ( 1,  0),
+    "left_rev":   (-1,  0),
+    "right_fwd":  ( 0,  1),
+    "right_rev":  ( 0, -1),
 }
 
 
@@ -53,9 +58,25 @@ class CommandPanel(tk.Frame):
                   command=lambda: self._add_dir("reverse")).grid(
                   row=1, column=1, columnspan=2, **pad)
 
+        # ── Single motor buttons ───────────────────────────────────────────
+        single_frame = tk.Frame(self)
+        single_frame.grid(row=1, column=0, columnspan=2, pady=4)
+
+        tk.Label(single_frame, text="Left only:").pack(side="left", padx=2)
+        tk.Button(single_frame, text="▲", width=3,
+                  command=lambda: self._add_dir("left_fwd")).pack(side="left", padx=2)
+        tk.Button(single_frame, text="▼", width=3,
+                  command=lambda: self._add_dir("left_rev")).pack(side="left", padx=2)
+
+        tk.Label(single_frame, text="Right only:").pack(side="left", padx=(12, 2))
+        tk.Button(single_frame, text="▲", width=3,
+                  command=lambda: self._add_dir("right_fwd")).pack(side="left", padx=2)
+        tk.Button(single_frame, text="▼", width=3,
+                  command=lambda: self._add_dir("right_rev")).pack(side="left", padx=2)
+
         # ── Wait input ────────────────────────────────────────────────────
         wait_frame = tk.Frame(self)
-        wait_frame.grid(row=1, column=0, columnspan=2, pady=4)
+        wait_frame.grid(row=2, column=0, columnspan=2, pady=4)
 
         tk.Label(wait_frame, text="Wait (ms):").pack(side="left", padx=4)
         self._wait_var = tk.IntVar(value=500)
@@ -66,10 +87,10 @@ class CommandPanel(tk.Frame):
 
         # ── Queue listbox ─────────────────────────────────────────────────
         tk.Label(self, text="Command queue:").grid(
-            row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
+            row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
 
         list_frame = tk.Frame(self)
-        list_frame.grid(row=3, column=0, columnspan=2, padx=8, pady=2, sticky="nsew")
+        list_frame.grid(row=4, column=0, columnspan=2, padx=8, pady=2, sticky="nsew")
 
         scrollbar = tk.Scrollbar(list_frame, orient="vertical")
         self._listbox = tk.Listbox(
@@ -81,7 +102,7 @@ class CommandPanel(tk.Frame):
         scrollbar.pack(side="right", fill="y")
 
         prog_frame = tk.Frame(self)
-        prog_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
+        prog_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
         prog_frame.columnconfigure(0, weight=1)
         self._queue_progress_var = tk.DoubleVar(value=0)
         self._queue_progress = ttk.Progressbar(
@@ -98,7 +119,7 @@ class CommandPanel(tk.Frame):
 
         # ── Queue controls ────────────────────────────────────────────────
         ctrl_frame = tk.Frame(self)
-        ctrl_frame.grid(row=5, column=0, columnspan=2, pady=4)
+        ctrl_frame.grid(row=6, column=0, columnspan=2, pady=4)
 
         tk.Button(ctrl_frame, text="Remove selected",
                   command=self._remove_selected).pack(side="left", padx=4)
@@ -108,18 +129,18 @@ class CommandPanel(tk.Frame):
         # ── Send / ESTOP ──────────────────────────────────────────────────
         tk.Button(self, text="Send sequence →",
                   command=self._send_sequence).grid(
-                  row=6, column=0, sticky="ew", padx=8, pady=4)
+                  row=7, column=0, sticky="ew", padx=8, pady=4)
 
         estop_btn = tk.Button(
             self, text="E-STOP",
             bg=Theme.ERROR_COLOR, fg="white", font=(Theme.FONT_MONO, Theme.FONT_SIZE_L, "bold"),
             command=self._estop,
         )
-        estop_btn.grid(row=6, column=1, sticky="ew", padx=8, pady=4)
+        estop_btn.grid(row=7, column=1, sticky="ew", padx=8, pady=4)
 
         tk.Button(self, text="Reboot",
                   command=self._reboot).grid(
-                  row=7, column=0, columnspan=2, pady=2)
+                  row=8, column=0, columnspan=2, pady=2)
 
     # ── Queue management ─────────────────────────────────────────────────────
 
