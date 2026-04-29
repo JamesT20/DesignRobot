@@ -42,6 +42,7 @@ class App:
         root.option_add("*Scrollbar*background", Theme.PANEL_BG)
         root.option_add("*Scrollbar*troughBackground", Theme.BG)
         root.title("DUI GUI")
+        root.iconphoto(False, tk.PhotoImage(file="logo.png"))
         root.geometry("1280x800")
         root.minsize(1024, 600)
 

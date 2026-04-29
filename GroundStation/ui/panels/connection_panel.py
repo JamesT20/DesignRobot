@@ -43,10 +43,10 @@ class ConnectionPanel(tk.Frame):
         info_frame.columnconfigure((0, 1, 2, 3), weight=1)
         self.columnconfigure(0, weight=1)
 
-        self._latency_lbl = self._info_section(info_frame, "Latency", "— ms", 0)
-        self._uptime_lbl = self._info_section(info_frame, "Uptime", "—", 1)
-        self._resolution_lbl = self._info_section(info_frame, "Res", "—", 2)
-        self._signal_lbl = self._info_section(info_frame, "Signal", "—", 3)
+        # self._latency_lbl = self._info_section(info_frame, "Latency", "— ms", 0)
+        # self._uptime_lbl = self._info_section(info_frame, "Uptime", "—", 1)
+        # self._resolution_lbl = self._info_section(info_frame, "Res", "—", 2)
+        # self._signal_lbl = self._info_section(info_frame, "Signal", "—", 3)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
